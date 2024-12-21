@@ -11,20 +11,8 @@ package(
     ],
 )
 
-# To include the symbol table, specific parameters are required:
-#    blaze build --strip=never --config=online_debug_backtraces //src:libgoogle-valkeysearch.so
-# For a release build, add the following parameter: --config=release
 redis_module_library(
-    name = "libgoogle-valkeysearch.so",
-    deps = [
-        ":module_loader",
-        ":server_events",
-        "//src/commands",
-    ],
-)
-
-redis_module_library(
-    name = "libgoogle-redisquery.so",
+    name = "valkeysearch.so",
     deps = [
         ":module_loader",
         ":server_events",
