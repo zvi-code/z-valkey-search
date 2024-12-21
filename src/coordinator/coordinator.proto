@@ -1,0 +1,135 @@
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package valkey_search.coordinator;
+
+import "google/protobuf/any.proto";
+
+service Coordinator {
+  // Get the current schema metadata.
+  rpc GetGlobalMetadata(GetGlobalMetadataRequest)
+      returns (GetGlobalMetadataResponse) {
+  }
+  // Search the index partition for documents.
+  rpc SearchIndexPartition(SearchIndexPartitionRequest)
+      returns (SearchIndexPartitionResponse) {
+  }
+}
+
+message LimitParameter {
+  uint64 first_index = 1;
+  uint64 number = 2;
+}
+
+message TagPredicate {
+  string attribute_alias = 1;
+  string raw_tag_string = 2;
+}
+
+message NumericPredicate {
+  string attribute_alias = 1;
+  double start = 2;
+  bool is_inclusive_start = 3;
+  double end = 4;
+  bool is_inclusive_end = 5;
+}
+
+message AndPredicate {
+  Predicate lhs = 1;
+  Predicate rhs = 2;
+}
+
+message OrPredicate {
+  Predicate lhs = 1;
+  Predicate rhs = 2;
+}
+
+message NegatePredicate {
+  Predicate predicate = 1;
+}
+
+message Predicate {
+  oneof predicate {
+    TagPredicate tag = 1;
+    NumericPredicate numeric = 2;
+    AndPredicate and = 3;
+    OrPredicate or = 4;
+    NegatePredicate negate = 5;
+  }
+}
+
+message ReturnParameter {
+  string identifier = 1;
+  string alias = 2;
+}
+
+message SearchIndexPartitionRequest {
+  string index_schema_name = 2;
+  string attribute_alias = 3;
+  optional string score_as = 4;
+  bytes query = 5;
+  uint32 dialect = 6;
+  uint32 k = 7;
+  uint64 ef = 8;
+  LimitParameter limit = 9;
+  uint64 timeout_ms = 10;
+  bool no_content = 11;
+  optional Predicate root_filter_predicate = 12;
+  repeated ReturnParameter return_parameters = 13;
+}
+
+message NeighborEntry {
+  string key = 1;
+  float score = 2;
+  repeated AttributeContentEntry attribute_contents = 3;
+}
+
+message SearchIndexPartitionResponse {
+  repeated NeighborEntry neighbors = 1;
+}
+
+message AttributeContentEntry {
+  string attribute_alias = 1;
+  bytes content = 2;
+}
+
+message GlobalMetadataVersionHeader {
+  uint64 top_level_fingerprint = 1;
+  uint32 top_level_version = 2;
+}
+
+message GlobalMetadata {
+  GlobalMetadataVersionHeader version_header = 1;
+  // Nested map. Outer map is namespace, inner map is ID to entry.
+  map<string, GlobalMetadataEntryMap> type_namespace_map = 2;
+}
+
+// GlobalMetadataEntryMap is a wrapper around a map from ID to metadata entry.
+message GlobalMetadataEntryMap {
+  map<string, GlobalMetadataEntry> entries = 1;
+}
+
+message GlobalMetadataEntry {
+  uint32 version = 1;
+  uint64 fingerprint = 2;
+  uint32 encoding_version = 3;
+  optional google.protobuf.Any content = 4;
+}
+
+message GetGlobalMetadataRequest {}
+message GetGlobalMetadataResponse {
+  GlobalMetadata metadata = 1;
+}

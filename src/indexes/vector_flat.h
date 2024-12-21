@@ -1,0 +1,110 @@
+/*
+ * Copyright 2024 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#ifndef VALKEYSEARCH_SRC_INDEXES_VECTOR_FLAT_H_
+#define VALKEYSEARCH_SRC_INDEXES_VECTOR_FLAT_H_
+
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <memory>
+#include <utility>
+
+#include "absl/base/thread_annotations.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
+#include "third_party/hnswlib/bruteforce.h"
+#include "third_party/hnswlib/hnswlib.h"
+#include "src/attribute_data_type.h"
+#include "src/indexes/vector_base.h"
+#include "src/rdb_io_stream.h"
+#include "src/utils/string_interning.h"
+#include "vmsdk/src/redismodule.h"
+
+namespace valkey_search::indexes {
+
+template <typename T>
+class VectorFlat : public VectorBase {
+ public:
+  static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> Create(
+      const data_model::VectorIndex& vector_index_proto,
+      absl::string_view attribute_identifier,
+      data_model::AttributeDataType attribute_data_type)
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> LoadFromRDB(
+      RedisModuleCtx* ctx, const AttributeDataType* attribute_data_type,
+      const data_model::VectorIndex& vector_index_proto,
+      RDBInputStream& rdb_stream, absl::string_view attribute_identifier)
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  virtual ~VectorFlat() = default;
+  size_t GetDataTypeSize() const override { return sizeof(T); }
+
+  const hnswlib::SpaceInterface<float>* GetSpace() const {
+    return space_.get();
+  }
+  int GetDimensions() const { return dimensions_; }
+  int GetBlockSize() const { return block_size_; }
+  size_t GetCapacity() const override { return algo_->data_->getCapacity(); }
+  absl::StatusOr<std::deque<Neighbor>> Search(
+      absl::string_view query, uint64_t count,
+      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr)
+      ABSL_LOCKS_EXCLUDED(resize_mutex_);
+
+ protected:
+  absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
+  absl::Status _AddRecord(uint64_t internal_id,
+                          absl::string_view record) override
+      ABSL_LOCKS_EXCLUDED(resize_mutex_);
+
+  absl::Status _RemoveRecord(uint64_t internal_id) override
+      ABSL_LOCKS_EXCLUDED(resize_mutex_);
+  absl::StatusOr<bool> _ModifyRecord(uint64_t internal_id,
+                                     absl::string_view record) override;
+  void _ToProto(data_model::VectorIndex* vector_index_proto) const override;
+  int _RespondWithInfo(RedisModuleCtx* ctx) const override;
+  absl::Status _SaveIndex(RDBOutputStream& rdb_stream) const override;
+  absl::StatusOr<std::pair<float, hnswlib::labeltype>>
+  _ComputeDistanceFromRecord(uint64_t internal_id,
+                             absl::string_view query) const override;
+  char* _GetValue(uint64_t internal_id) const override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    return algo_->getPoint(internal_id);
+  }
+  char* TrackVector(uint64_t internal_id,
+                    const InternedStringPtr& vector) override
+      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
+  void UnTrackVector(uint64_t internal_id) override
+      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
+
+ private:
+  VectorFlat(int dimensions, data_model::DistanceMetric distance_metric,
+             uint32_t block_size, absl::string_view attribute_identifier,
+             data_model::AttributeDataType attribute_data_type);
+  std::unique_ptr<hnswlib::BruteforceSearch<T>> algo_
+      ABSL_GUARDED_BY(resize_mutex_);
+  std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
+  uint32_t block_size_;
+  mutable absl::Mutex resize_mutex_;
+  mutable absl::Mutex tracked_vectors_mutex_;
+  absl::flat_hash_map<uint64_t, InternedStringPtr> tracked_vectors_
+      ABSL_GUARDED_BY(tracked_vectors_mutex_);
+};
+}  // namespace valkey_search::indexes
+
+#endif  // VALKEYSEARCH_SRC_INDEXES_VECTOR_FLAT_H_

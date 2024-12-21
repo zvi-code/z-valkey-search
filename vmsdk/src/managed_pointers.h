@@ -1,0 +1,210 @@
+/*
+ * Copyright 2024 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#ifndef VMSDK_SRC_MANAGED_POINTERS_H_
+#define VMSDK_SRC_MANAGED_POINTERS_H_
+
+#include <cstddef>
+#include <memory>
+#include <utility>
+
+#include "absl/strings/string_view.h"
+#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/utils.h"
+
+namespace vmsdk {
+
+struct RedisStringDeleter {
+  void operator()(RedisModuleString *str) {
+    RedisModule_FreeString(nullptr, str);
+  }
+};
+
+using UniqueRedisString =
+    std::unique_ptr<RedisModuleString, RedisStringDeleter>;
+
+inline UniqueRedisString UniquePtrRedisString(RedisModuleString *redis_str) {
+  return std::unique_ptr<RedisModuleString, RedisStringDeleter>(redis_str);
+}
+
+inline UniqueRedisString MakeUniqueRedisString(absl::string_view str) {
+  auto redis_str = RedisModule_CreateString(nullptr, str.data(), str.size());
+  return UniquePtrRedisString(redis_str);
+}
+
+inline UniqueRedisString MakeUniqueRedisString(char *str) {
+  if (str) {
+    return MakeUniqueRedisString(absl::string_view(str));
+  }
+  return UniquePtrRedisString(nullptr);
+}
+
+inline UniqueRedisString RetainUniqueRedisString(RedisModuleString *redis_str) {
+  RedisModule_RetainString(nullptr, redis_str);
+  return UniquePtrRedisString(redis_str);
+}
+
+class BlockedClient {
+ public:
+  BlockedClient(RedisModuleBlockedClient *blocked_client = nullptr)
+      : blocked_client_(blocked_client) {}
+  BlockedClient(RedisModuleCtx *ctx,
+                RedisModuleCmdFunc reply_callback = nullptr,
+                RedisModuleCmdFunc timeout_callback = nullptr,
+                void (*free_privdata)(RedisModuleCtx *, void *) = nullptr,
+                long long timeout_ms = 0) {  // NOLINT
+    blocked_client_ = RedisModule_BlockClient(
+        ctx, reply_callback, timeout_callback, free_privdata, timeout_ms);
+  }
+  BlockedClient(BlockedClient &&other)
+      : blocked_client_(std::exchange(other.blocked_client_, nullptr)),
+        private_data_(std::exchange(other.private_data_, nullptr)) {}
+
+  BlockedClient &operator=(BlockedClient &&other) {
+    if (this != &other) {
+      UnblockClient();
+      blocked_client_ = std::exchange(other.blocked_client_, nullptr);
+      private_data_ = std::exchange(other.private_data_, nullptr);
+    }
+    return *this;
+  }
+
+  BlockedClient(const BlockedClient &other) = delete;
+  BlockedClient &operator=(const BlockedClient &other) = delete;
+
+  operator RedisModuleBlockedClient *() const { return blocked_client_; }
+  void SetReplyPrivateData(void *private_data) { private_data_ = private_data; }
+  void UnblockClient() {
+    if (!blocked_client_) {
+      return;
+    }
+    MeasureTimeEnd();
+    RedisModule_UnblockClient(blocked_client_, private_data_);
+    blocked_client_ = nullptr;
+    private_data_ = nullptr;
+  }
+  void MeasureTimeStart() {
+    if (time_measurement_ongoing_ || !blocked_client_) {
+      return;
+    }
+    RedisModule_BlockedClientMeasureTimeStart(blocked_client_);
+    time_measurement_ongoing_ = true;
+  }
+  void MeasureTimeEnd() {
+    if (!time_measurement_ongoing_ || !blocked_client_) {
+      return;
+    }
+    RedisModule_BlockedClientMeasureTimeEnd(blocked_client_);
+    time_measurement_ongoing_ = false;
+  }
+  ~BlockedClient() { UnblockClient(); }
+
+ private:
+  RedisModuleBlockedClient *blocked_client_{nullptr};
+  void *private_data_{nullptr};
+  bool time_measurement_ongoing_{false};
+};
+
+struct RedisOpenKeyDeleter {
+  void operator()(RedisModuleKey *module_key) {
+    if (module_key) {
+      RedisModule_CloseKey(module_key);
+    }
+  }
+};
+
+using UniqueRedisOpenKey = std::unique_ptr<RedisModuleKey, RedisOpenKeyDeleter>;
+
+inline UniqueRedisOpenKey UniquePtrRedisOpenKey(RedisModuleKey *redis_key) {
+  return std::unique_ptr<RedisModuleKey, RedisOpenKeyDeleter>(redis_key);
+}
+
+inline UniqueRedisOpenKey MakeUniqueRedisOpenKey(RedisModuleCtx *ctx,
+                                                 RedisModuleString *str,
+                                                 int flags) {
+  VerifyMainThread();
+  auto module_key = RedisModule_OpenKey(ctx, str, flags);
+  return std::unique_ptr<RedisModuleKey, RedisOpenKeyDeleter>(module_key);
+}
+
+struct RedisReplyDeleter {
+  void operator()(RedisModuleCallReply *reply) {
+    RedisModule_FreeCallReply(reply);
+  }
+};
+
+using UniqueRedisCallReply =
+    std::unique_ptr<RedisModuleCallReply, RedisReplyDeleter>;
+
+inline UniqueRedisCallReply UniquePtrRedisCallReply(
+    RedisModuleCallReply *reply) {
+  return std::unique_ptr<RedisModuleCallReply, RedisReplyDeleter>(reply);
+}
+
+struct RedisScanCursorDeleter {
+  void operator()(RedisModuleScanCursor *cursor) {
+    RedisModule_ScanCursorDestroy(cursor);
+  }
+};
+
+using UniqueRedisScanCursor =
+    std::unique_ptr<RedisModuleScanCursor, RedisScanCursorDeleter>;
+
+inline UniqueRedisScanCursor UniquePtrRedisScanCursor(
+    RedisModuleScanCursor *cursor) {
+  return std::unique_ptr<RedisModuleScanCursor, RedisScanCursorDeleter>(cursor);
+}
+
+inline UniqueRedisScanCursor MakeUniqueRedisScanCursor() {
+  auto cursor = RedisModule_ScanCursorCreate();
+  return std::unique_ptr<RedisModuleScanCursor, RedisScanCursorDeleter>(cursor);
+}
+
+struct RedisDetachedThreadSafeContextDeleter {
+  void operator()(RedisModuleCtx *ctx) {
+    // Contexts cannot be safely freed from a background thread since they
+    // assert if IO threads are active.
+    RunByMain([ctx]() { RedisModule_FreeThreadSafeContext(ctx); });
+  }
+};
+
+using UniqueRedisDetachedThreadSafeContext =
+    std::unique_ptr<RedisModuleCtx, RedisDetachedThreadSafeContextDeleter>;
+
+inline UniqueRedisDetachedThreadSafeContext
+MakeUniqueRedisDetachedThreadSafeContext(RedisModuleCtx *base_ctx) {
+  auto ctx = RedisModule_GetDetachedThreadSafeContext(base_ctx);
+  return std::unique_ptr<RedisModuleCtx, RedisDetachedThreadSafeContextDeleter>(
+      ctx);
+}
+
+struct RedisClusterNodesListDeleter {
+  void operator()(char **nodes_list) {
+    RedisModule_FreeClusterNodesList(nodes_list);
+  }
+};
+
+using UniqueRedisClusterNodesList =
+    std::unique_ptr<char *, RedisClusterNodesListDeleter>;
+
+inline UniqueRedisClusterNodesList MakeUniqueRedisClusterNodesList(
+    RedisModuleCtx *ctx, size_t *num_nodes) {
+  auto nodes_list = RedisModule_GetClusterNodesList(ctx, num_nodes);
+  return std::unique_ptr<char *, RedisClusterNodesListDeleter>(nodes_list);
+}
+
+}  // namespace vmsdk
+#endif  // VMSDK_SRC_MANAGED_POINTERS_H_

@@ -1,0 +1,18 @@
+module(
+    name = "com_google_valkeysearch",
+    version = "1.0.0",  
+)
+bazel_dep(name = "rules_cc", version = "0.0.16")
+bazel_dep(name = "abseil-cpp", version = "20240722.0.bcr.1", repo_name = "com_google_absl")
+bazel_dep(name = "protobuf", version = "29.1", repo_name = "com_google_protobuf")
+bazel_dep(name = "boringssl", version = "0.20241024.0")
+bazel_dep(name = "grpc", version = "1.68.0", repo_name = "com_github_grpc_grpc")
+bazel_dep(name = "re2", version = "2024-07-02", repo_name = "com_googlesource_code_re2") # rename to com_google_re2
+bazel_dep(name = "rules_proto", version = "7.0.2")
+bazel_dep(name = "googletest", version = "1.15.2", dev_dependency = True, repo_name = "com_google_googletest")
+bazel_dep(name = "riegeli", version = "0.0.0-20240927-cdfb25a", repo_name = "com_google_riegeli")  # intrinsic:*:strip
+bazel_dep(name = "hdrhistogram_c", version = "0.11.2", repo_name = "com_github_hdrhistogram_c")
+bazel_dep(name = "highwayhash", version = "0.0.0-20240305-5ad3bf8")
+bazel_dep(name = "rules_license", version = "1.0.0")
+bazel_dep(name = "bazel_skylib", version = "1.7.1")
+

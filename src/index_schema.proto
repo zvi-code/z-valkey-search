@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+package valkey_search.data_model;
+
+enum AttributeDataType {
+  ATTRIBUTE_DATA_TYPE_UNSPECIFIED = 0;
+  ATTRIBUTE_DATA_TYPE_HASH = 1;
+  ATTRIBUTE_DATA_TYPE_JSON = 2;
+}
+
+enum Language {
+  LANGUAGE_UNSPECIFIED = 0;
+  LANGUAGE_ENGLISH = 1;
+}
+
+message IndexSchema {
+  message Stats {
+    // Total number of hash keys indexed
+    uint32 documents_count = 1;
+    // Sum of vectors indexed in all the indexes for the IndexSchema
+    uint32 records_count = 2 [deprecated = true];
+  }
+
+  string name = 1;
+  repeated string subscribed_key_prefixes = 2;
+  AttributeDataType attribute_data_type = 3;
+  Language language = 4;
+  float score = 5;
+  repeated Attribute attributes = 6;
+  Stats stats = 7;
+  optional uint32 db_num = 8;
+}
+
+enum AttributeIndexType {
+  ATTRIBUTE_INDEX_TYPE_UNSPECIFIED = 0;
+  ATTRIBUTE_INDEX_TYPE_VECTOR = 1;
+}
+
+message Attribute {
+  string alias = 1;
+  string identifier = 2;
+  Index index = 3;
+}
+
+message Index {
+  oneof index_type {
+    VectorIndex vector_index = 1;
+    NumericIndex numeric_index = 2;
+    TagIndex tag_index = 3;
+  }
+}
+
+message NumericIndex {}
+
+message TagIndex {
+  string separator = 1;
+  bool case_sensitive = 2;
+}
+
+message TrackedKeys {
+  repeated TrackedKeyMetadata tracked_key_metadata = 1;
+}
+
+message TrackedKeyMetadata {
+  string key = 1;
+  uint64 internal_id = 2;
+  float magnitude = 3;
+}
+
+message VectorIndex {
+  uint32 dimension_count = 1;
+  bool normalize = 2;
+  DistanceMetric distance_metric = 3;
+  VectorDataType vector_data_type = 4;
+  uint32 initial_cap = 5;
+  oneof algorithm {
+    HNSWAlgorithm hnsw_algorithm = 6;
+    FlatAlgorithm flat_algorithm = 7;
+  }
+  optional TrackedKeys tracked_keys = 8;
+}
+
+enum DistanceMetric {
+  DISTANCE_METRIC_UNSPECIFIED = 0;
+  DISTANCE_METRIC_L2 = 1;
+  DISTANCE_METRIC_IP = 2;
+  DISTANCE_METRIC_COSINE = 3;
+}
+
+enum VectorDataType {
+  VECTOR_DATA_TYPE_UNSPECIFIED = 0;
+  VECTOR_DATA_TYPE_FLOAT32 = 1;
+}
+
+message HNSWAlgorithm {
+  uint32 m = 1;
+  uint32 ef_construction = 2;
+  uint32 ef_runtime = 3;
+}
+
+message FlatAlgorithm {
+  uint32 block_size = 1;
+}
