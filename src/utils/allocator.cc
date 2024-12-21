@@ -158,21 +158,23 @@ void FixedSizeAllocator::AllocateChunk() {
 }
 
 void FixedSizeAllocator::Free(AllocatorChunk *chunk, char *ptr) {
-  absl::MutexLock lock(&mutex_);
-  --active_allocations_;
+  {
+    absl::MutexLock lock(&mutex_);
+    --active_allocations_;
 
-  int free_group = CalcChunkFreeGroup(chunk->free_list.size());
-  chunk->free_list.push(ptr);
-  HandleChunkEntryUsageChange(chunk, free_group);
-  if (chunk->free_list.size() == chunk->entries_in_chunk) {
-    chunks_grouped_by_free_entries_[CalcChunkFreeGroup(chunk->free_list.size())]
-        .Remove(chunk);
-    if (chunk == current_chunk_) {
-      current_chunk_ = nullptr;
+    int free_group = CalcChunkFreeGroup(chunk->free_list.size());
+    chunk->free_list.push(ptr);
+    HandleChunkEntryUsageChange(chunk, free_group);
+    if (chunk->free_list.size() == chunk->entries_in_chunk) {
+      chunks_grouped_by_free_entries_[CalcChunkFreeGroup(chunk->free_list.size())]
+          .Remove(chunk);
+      if (chunk == current_chunk_) {
+        current_chunk_ = nullptr;
+      }
+      delete chunk;
     }
-    delete chunk;
+    SelectCurrentChunk();
   }
-  SelectCurrentChunk();
   DecrementRef();
 }
 
