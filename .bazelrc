@@ -72,7 +72,7 @@ build --cxxopt=-fsized-deallocation
 
 test --compilation_mode=fastbuild
 # Enabling thin lto
-build --copt=-flto
+build --copt=-flto=auto
 build --linkopt=-flto
 build --linkopt=-fuse-linker-plugin
 test --copt=-fno-lto
