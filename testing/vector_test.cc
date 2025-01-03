@@ -517,8 +517,6 @@ TEST_F(VectorIndexTest, SaveAndLoadHnswTrackedKeysNotInProto) {
         EXPECT_TRUE((*index_hnsw)->GetNormalize());
       }
       VMSDK_EXPECT_OK((*index_hnsw)->SaveIndex(rdb_stream));
-      // Mimic the old format by saving zero tracked keys.
-      VMSDK_EXPECT_OK(rdb_stream.saveSizeT(0));
     }
 
     // Load the HNSW index, populate data, validate recall, save again
@@ -538,16 +536,6 @@ TEST_F(VectorIndexTest, SaveAndLoadHnswTrackedKeysNotInProto) {
       VMSDK_EXPECT_OK((*loaded_index_hnsw)->SaveIndex(rdb_stream));
       auto new_proto = (*loaded_index_hnsw)->ToProto()->vector_index();
       EXPECT_TRUE(new_proto.has_tracked_keys());
-      // Mimic the old format by saving tracked keys.
-      VMSDK_EXPECT_OK(rdb_stream.saveSizeT(
-          new_proto.tracked_keys().tracked_key_metadata_size()));
-      for (const auto& tracked_key_metadata :
-           new_proto.tracked_keys().tracked_key_metadata()) {
-        VMSDK_EXPECT_OK(rdb_stream.saveSizeT(tracked_key_metadata.internal_id()));
-        VMSDK_EXPECT_OK(
-            rdb_stream.saveStringBuffer(tracked_key_metadata.key().c_str(),
-                                        tracked_key_metadata.key().size()));
-      }
     }
 
     // Load the HNSW index, run search queries and validate recall
@@ -682,8 +670,6 @@ TEST_F(VectorIndexTest, SaveAndLoadFlatTrackedKeysNotInProto) {
         EXPECT_TRUE(index.value()->GetNormalize());
       }
       VMSDK_EXPECT_OK(index.value()->SaveIndex(rdb_stream));
-      // Mimic the old format by saving zero tracked keys.
-      VMSDK_EXPECT_OK(rdb_stream.saveSizeT(0));
     }
 
     // Load the index, populate data, perform search, save the index again
@@ -706,16 +692,6 @@ TEST_F(VectorIndexTest, SaveAndLoadFlatTrackedKeysNotInProto) {
       EXPECT_TRUE(new_proto.has_tracked_keys());
       EXPECT_EQ(new_proto.tracked_keys().tracked_key_metadata_size(),
                 vectors.size());
-      // Mimic the old format by saving tracked keys.
-      VMSDK_EXPECT_OK(rdb_stream.saveSizeT(
-          new_proto.tracked_keys().tracked_key_metadata_size()));
-      for (const auto& tracked_key_metadata :
-           new_proto.tracked_keys().tracked_key_metadata()) {
-        VMSDK_EXPECT_OK(rdb_stream.saveSizeT(tracked_key_metadata.internal_id()));
-        VMSDK_EXPECT_OK(
-            rdb_stream.saveStringBuffer(tracked_key_metadata.key().c_str(),
-                                        tracked_key_metadata.key().size()));
-      }
     }
 
     // Load the index, run search queries and validate that the search results

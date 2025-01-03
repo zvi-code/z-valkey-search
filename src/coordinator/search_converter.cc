@@ -103,6 +103,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
     case Predicate::PREDICATE_NOT_SET:
       return absl::InvalidArgumentError("Predicate not set");
   }
+  CHECK(false);
 }
 
 absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
@@ -208,6 +209,7 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
       return nullptr;
     }
   }
+  CHECK(false);
 }
 
 std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(

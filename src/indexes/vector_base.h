@@ -195,6 +195,8 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
                                const data_model::TrackedKeys& tracked_keys);
   // Used for backwards compatibility.
   // TODO(b/) remove after rollout.
+  absl::Status ConsumeKeysAndInternalIdsForBackCompat(
+      RDBInputStream& rdb_stream);
   absl::Status LoadKeysAndInternalIds(
       RedisModuleCtx* ctx, const AttributeDataType* attribute_data_type,
       RDBInputStream& rdb_stream);

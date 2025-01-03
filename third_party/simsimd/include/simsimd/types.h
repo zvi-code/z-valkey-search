@@ -191,6 +191,8 @@
 #define SIMSIMD_F16_DIVISION_EPSILON (1e-3)
 #endif
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -428,4 +430,5 @@ SIMSIMD_PUBLIC unsigned short simsimd_compress_bf16(simsimd_f32_t x) {
 } // extern "C"
 #endif
 
+#pragma GCC diagnostic pop
 #endif

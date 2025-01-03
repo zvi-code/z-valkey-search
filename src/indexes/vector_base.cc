@@ -152,8 +152,7 @@ void VectorBase::Init(int dimensions,
 }
 
 std::shared_ptr<InternedString> VectorBase::InternVector(
-     absl::string_view record,
-    std::optional<float> &magnitude) {
+    absl::string_view record, std::optional<float> &magnitude) {
   if (!IsValidSizeVector(record)) {
     return nullptr;
   }
@@ -227,7 +226,7 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
   std::optional<float> magnitude;
   auto interned_vector = InternVector(record, magnitude);
   if (!interned_vector) {
-     [[maybe_unused]] auto res =
+    [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kRecord);
     return false;
   }
@@ -394,6 +393,15 @@ int VectorBase::RespondWithInfo(RedisModuleCtx *ctx) const {
 
 absl::Status VectorBase::SaveIndex(RDBOutputStream &rdb_stream) const {
   VMSDK_RETURN_IF_ERROR(_SaveIndex(rdb_stream));
+  absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
+  VMSDK_RETURN_IF_ERROR(rdb_stream.saveSizeT(key_by_internal_id_.size()))
+      << "Error saving key_by_internal_id_ size";
+  for (const auto &[id, key] : key_by_internal_id_) {
+    VMSDK_RETURN_IF_ERROR(rdb_stream.saveSizeT(id)) << "Error saving id";
+    VMSDK_RETURN_IF_ERROR(
+        rdb_stream.saveStringBuffer(key->Str().data(), key->Str().size()))
+        << "Error saving key";
+  }
   return absl::OkStatus();
 }
 
@@ -440,6 +448,21 @@ absl::Status VectorBase::LoadTrackedKeys(
                       attribute_identifier_);
   }
   ++inc_id_;
+  return absl::OkStatus();
+}
+
+/* Simply consumes the RDB stream and does not save anything. */
+absl::Status VectorBase::ConsumeKeysAndInternalIdsForBackCompat(
+    RDBInputStream &rdb_stream) {
+  size_t keys_count;
+  VMSDK_RETURN_IF_ERROR(rdb_stream.loadSizeT(keys_count))
+      << "Error loading keys count";
+  for (int i = 0; i < keys_count; ++i) {
+    size_t id;
+    VMSDK_RETURN_IF_ERROR(rdb_stream.loadSizeT(id)) << "Error loading id";
+    VMSDK_ASSIGN_OR_RETURN(auto key, rdb_stream.loadString(),
+                           _ << "Error loading key");
+  }
   return absl::OkStatus();
 }
 

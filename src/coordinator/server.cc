@@ -20,14 +20,10 @@
 #include <string>
 #include <utility>
 
-
-#include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
-#include "absl/time/time.h"
 #include "grpc/grpc.h"
 #include "grpcpp/completion_queue.h"
-#include "grpcpp/health_check_service_interface.h"
 #include "grpcpp/security/server_credentials.h"
 #include "grpcpp/server_builder.h"
 #include "grpcpp/server_context.h"
@@ -51,7 +47,6 @@
 #include "vmsdk/src/utils.h"
 
 namespace valkey_search::coordinator {
-
 
 grpc::ServerUnaryReactor* Service::GetGlobalMetadata(
     grpc::CallbackServerContext* context,
@@ -181,16 +176,16 @@ ServerImpl::ServerImpl(std::unique_ptr<Service> coordinator_service,
       port_(port) {}
 
 std::unique_ptr<Server> ServerImpl::Create(
-    RedisModuleCtx* ctx, vmsdk::ThreadPool* reader_thread_pool,
+    vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx,
+    vmsdk::ThreadPool* reader_thread_pool,
     vmsdk::ThreadPool* writer_thread_pool, uint16_t port) {
   std::string server_address = absl::StrCat("[::]:", port);
-  grpc::EnableDefaultHealthCheckService(true);
+
   std::shared_ptr<grpc::ServerCredentials> creds =
       grpc::InsecureServerCredentials();
+  auto ctx = detached_ctx.get();
   auto coordinator_service = std::make_unique<Service>(
-      vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx), reader_thread_pool,
-      writer_thread_pool);
-
+      std::move(detached_ctx), reader_thread_pool, writer_thread_pool);
   grpc::ServerBuilder builder;
   builder.AddListeningPort(server_address, creds);
   builder.RegisterService(coordinator_service.get());
@@ -205,7 +200,6 @@ std::unique_ptr<Server> ServerImpl::Create(
   }
   VMSDK_LOG(NOTICE, ctx) << "Coordinator Server listening on "
                          << server_address;
-
   return std::unique_ptr<Server>(
       new ServerImpl(std::move(coordinator_service), std::move(server), port));
 }

@@ -55,6 +55,8 @@ static uint64_t xgetbv(unsigned int index) {
 #include <immintrin.h>
 #endif
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 #if defined(__GNUC__)
 #define PORTABLE_ALIGN32 __attribute__((aligned(32)))
 #define PORTABLE_ALIGN64 __attribute__((aligned(64)))
@@ -306,6 +308,8 @@ class ChunkedArray {
 };
 
 }  // namespace hnswlib
+
+#pragma GCC diagnostic pop
 
 #include "space_l2.h"
 #include "space_ip.h"

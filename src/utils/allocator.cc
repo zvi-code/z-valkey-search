@@ -166,7 +166,8 @@ void FixedSizeAllocator::Free(AllocatorChunk *chunk, char *ptr) {
     chunk->free_list.push(ptr);
     HandleChunkEntryUsageChange(chunk, free_group);
     if (chunk->free_list.size() == chunk->entries_in_chunk) {
-      chunks_grouped_by_free_entries_[CalcChunkFreeGroup(chunk->free_list.size())]
+      chunks_grouped_by_free_entries_[CalcChunkFreeGroup(
+                                          chunk->free_list.size())]
           .Remove(chunk);
       if (chunk == current_chunk_) {
         current_chunk_ = nullptr;

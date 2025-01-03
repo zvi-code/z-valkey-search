@@ -9,6 +9,8 @@
 #include "third_party/hnswlib/simsimd.h"
 #endif
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 namespace hnswlib {
 
 static float
@@ -334,3 +336,4 @@ class L2SpaceI : public SpaceInterface<int> {
     ~L2SpaceI() {}
 };
 }  // namespace hnswlib
+#pragma GCC diagnostic pop

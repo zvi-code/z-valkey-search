@@ -24,6 +24,8 @@
 
 #include "types.h"
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -570,4 +572,5 @@ simsimd_js_f16_sapphire_cycle:
 }
 #endif
 
+#pragma GCC diagnostic pop
 #endif

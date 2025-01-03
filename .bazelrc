@@ -39,12 +39,23 @@ build --copt=-D_LIBCPP_ENABLE_REMOVED_ALLOCATOR_CONST
 build --copt=-D_LIBCPP_ENABLE_CXX20_REMOVED_UNCAUGHT_EXCEPTION
 build --copt=-DOS_LINUX
 build --copt=-O3
-build --copt=-ffast-math 
+build --copt=-ffast-math
 build --copt=-funroll-loops
 build --copt=-ftree-vectorize
-build --copt=-fopenmp 
+build --copt=-fopenmp
 build --copt=-mavx2
-build --copt=-mfma 
+build --copt=-mfma
+build --copt=-Wuninitialized
+build --copt=-Wno-unknown-pragmas
+build --per_file_copt=external/.*@-w
+build --host_per_file_copt=external/.*@-w
+build --per_file_copt=third_party/.*@-w
+build --host_per_file_copt=third_party/.*@-w
+build --per_file_copt=testing/.*@-Wno-overloaded-virtual
+build --host_per_file_copt=testing/.*@-Wno-overloaded-virtual
+
+
+build --copt=-Werror
 
 build --copt=-fdata-sections
 build --copt=-fexceptions
@@ -58,7 +69,6 @@ build --copt=-fno-rounding-math
 build --copt=-fno-signed-char
 build --copt=-fno-signed-zeros
 build --cxxopt=-fsized-deallocation
-build --copt=-ftrivial-auto-var-init=pattern
 
 test --compilation_mode=fastbuild
 # Enabling thin lto
@@ -68,10 +78,6 @@ build --linkopt=-fuse-linker-plugin
 test --copt=-fno-lto
 test --linkopt=-fno-lto
 test --cxxopt=-O1
-
-# Developer/CI config with more compiler warnings: --config=dev
-#build:dev --copt=-Wall
-build:dev --copt=-Werror
 
 # ASan: --config=asan
 build:asan --//gwpsan:sanitizer=asan

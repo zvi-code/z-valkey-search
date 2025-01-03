@@ -9,6 +9,9 @@
 #include "third_party/hnswlib/simsimd.h"
 #endif
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wunused-variable"
 namespace hnswlib {
 
 static float
@@ -410,3 +413,4 @@ class InnerProductSpace : public SpaceInterface<float> {
 };
 
 }  // namespace hnswlib
+#pragma GCC diagnostic pop

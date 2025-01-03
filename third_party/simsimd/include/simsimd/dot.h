@@ -31,6 +31,8 @@
 extern "C" {
 #endif
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 // clang-format off
 
 /*  Serial backends for all numeric types.
@@ -1684,4 +1686,5 @@ simsimd_dot_i8_ice_cycle:
 }
 #endif
 
+#pragma GCC diagnostic pop
 #endif

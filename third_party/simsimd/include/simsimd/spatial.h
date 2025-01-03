@@ -29,6 +29,8 @@
 
 #include "dot.h" // `_mm256_reduce_add_ps_dbl`
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -1507,4 +1509,5 @@ simsimd_cos_i8_ice_cycle:
 }
 #endif
 
+#pragma GCC diagnostic pop
 #endif

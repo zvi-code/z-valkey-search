@@ -37,20 +37,16 @@ cc_library(
         "//vmsdk/src:memory_allocation_overrides",
         "//vmsdk/src/status:status_macros",
     ],
-    cxxopts = [
-    "-Wno-unused-function",
-    "-Wno-unknown-pragmas",
-    ],
 )
 
 cc_library(
     name = "simsimd",
-    hdrs = ["simsimd.h"],
+    textual_hdrs = ["simsimd.h"],
     deps = [
         "//third_party/simsimd/c:lib",
         "//third_party/simsimd/include/simsimd",
     ],
-    cxxopts = [
+    copts = [
     "-Wno-unused-function",
     "-Wno-unknown-pragmas",
     ],

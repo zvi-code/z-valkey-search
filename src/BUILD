@@ -6,11 +6,13 @@ package(
     default_applicable_licenses = ["//:license"],
     default_visibility = [
         "//:__subpackages__",
-        "//cloud/hosted/memorystore/dataplane:__subpackages__",
         "//third_party/managed_redis:__subpackages__",
     ],
 )
 
+# To include the symbol table, specific parameters are required:
+#    --strip=never --config=online_debug_backtraces
+# For a release build, add the following parameter: --config=release
 redis_module_library(
     name = "valkeysearch.so",
     deps = [

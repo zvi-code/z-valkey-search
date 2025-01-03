@@ -24,6 +24,9 @@
 extern "C" {
 #endif
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+
 // clang-format off
 
 /*  Serial backends for bitsets. */
@@ -257,4 +260,5 @@ SIMSIMD_PUBLIC void simsimd_jaccard_b8_haswell(simsimd_b8_t const* a, simsimd_b8
 }
 #endif
 
+#pragma GCC diagnostic pop
 #endif

@@ -80,11 +80,6 @@ class ValkeySearch {
   friend absl::NoDestructor<ValkeySearch>;
 
   bool UsingCoordinator() const { return coordinator_ != nullptr; }
-  bool IsCluster() const {
-    return RedisModule_GetContextFlags(GetBackgroundCtx()) &
-           REDISMODULE_CTX_FLAGS_CLUSTER;
-  }
-
   coordinator::ClientPool *GetCoordinatorClientPool() const {
     return client_pool_.get();
   }
@@ -98,6 +93,7 @@ class ValkeySearch {
   void SetCoordinatorServer(std::unique_ptr<coordinator::Server> server) {
     coordinator_ = std::move(server);
   }
+
   // GetBackgroundCtx returns a RedisModuleCtx that is valid for the scope of
   // the module lifetime. Getting this context should be safe for the duration
   // of the program.

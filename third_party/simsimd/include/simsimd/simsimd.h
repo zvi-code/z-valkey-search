@@ -110,6 +110,8 @@
 #if defined(SIMSIMD_DEFINED_APPLE)
 #include <sys/sysctl.h>
 #endif
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 
 #ifdef __cplusplus
 extern "C" {
@@ -1487,5 +1489,5 @@ SIMSIMD_PUBLIC void simsimd_js_f64(simsimd_f64_t const* a, simsimd_f64_t const* 
 #ifdef __cplusplus
 }
 #endif
-
+#pragma GCC diagnostic pop
 #endif // SIMSIMD_H

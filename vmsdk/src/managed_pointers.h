@@ -45,7 +45,7 @@ inline UniqueRedisString MakeUniqueRedisString(absl::string_view str) {
   return UniquePtrRedisString(redis_str);
 }
 
-inline UniqueRedisString MakeUniqueRedisString(char *str) {
+inline UniqueRedisString MakeUniqueRedisString(const char *str) {
   if (str) {
     return MakeUniqueRedisString(absl::string_view(str));
   }

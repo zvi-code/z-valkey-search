@@ -112,6 +112,8 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     if (vector_index_proto.has_tracked_keys()) {
       VMSDK_RETURN_IF_ERROR(index->LoadTrackedKeys(
           ctx, attribute_data_type, vector_index_proto.tracked_keys()));
+      VMSDK_RETURN_IF_ERROR(
+          index->ConsumeKeysAndInternalIdsForBackCompat(rdb_stream));
     } else {
       // Previous versions stored tracked keys in the index contents.
       VMSDK_RETURN_IF_ERROR(
