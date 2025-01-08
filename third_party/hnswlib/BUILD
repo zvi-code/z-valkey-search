@@ -47,8 +47,8 @@ cc_library(
         "//third_party/simsimd/include/simsimd",
     ],
     copts = [
-    "-Wno-unused-function",
-    "-Wno-unknown-pragmas",
+        "-Wno-unused-function",
+        "-Wno-unknown-pragmas",
     ],
 )
 

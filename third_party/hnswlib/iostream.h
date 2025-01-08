@@ -112,7 +112,7 @@ class FileOutputStream : public OutputStream {
   absl::Status saveSigned(int val) override { return savePOD(val); }
   absl::Status saveDouble(double val) override { return savePOD(val); }
 
-  absl::Status saveStringBuffer(const char *str, size_t len) {
+  absl::Status saveStringBuffer(const char *str, size_t len) override {
     output_->write(str, len);
     if (*output_) return absl::OkStatus();
     return absl::InternalError("Error writing string buffer to file");

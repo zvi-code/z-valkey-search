@@ -61,9 +61,9 @@ void HashScanCallback(RedisModuleKey *key, RedisModuleString *field,
   }
   if (callback_data->identifiers.empty() ||
       callback_data->identifiers.contains(field_str)) {
-    callback_data->key_value_content.emplace(field_str,
-        RecordsMapValue(vmsdk::RetainUniqueRedisString(field),
-                        vmsdk::RetainUniqueRedisString(value)));
+    callback_data->key_value_content.emplace(
+        field_str, RecordsMapValue(vmsdk::RetainUniqueRedisString(field),
+                                   vmsdk::RetainUniqueRedisString(value)));
   }
 }
 
@@ -137,8 +137,9 @@ absl::StatusOr<RecordsMap> JsonAttributeDataType::FetchAllRecords(
     if (!str.ok()) {
       continue;
     }
-    key_value_content.emplace(identifier, RecordsMapValue(
-        vmsdk::MakeUniqueRedisString(identifier), std::move(str.value())));
+    key_value_content.emplace(
+        identifier, RecordsMapValue(vmsdk::MakeUniqueRedisString(identifier),
+                                    std::move(str.value())));
   }
   return key_value_content;
 }

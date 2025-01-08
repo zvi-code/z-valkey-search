@@ -75,15 +75,17 @@ class Tag : public IndexBase {
   const absl::flat_hash_set<absl::string_view>* GetValue(
       const InternedStringPtr& key,
       bool& case_sensitive) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  using PatriciaTree = PatriciaTree<InternedStringPtr, InternedStringPtrHash,
-                                    InternedStringPtrEqual>;
-  using PatriciaNode = PatriciaNode<InternedStringPtr, InternedStringPtrHash,
-                                    InternedStringPtrEqual>;
+  using PatriciaTreeIndex =
+      PatriciaTree<InternedStringPtr, InternedStringPtrHash,
+                   InternedStringPtrEqual>;
+  using PatriciaNodeIndex =
+      PatriciaNode<InternedStringPtr, InternedStringPtrHash,
+                   InternedStringPtrEqual>;
 
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
    public:
-    EntriesFetcherIterator(const PatriciaTree& tree,
-                           absl::flat_hash_set<PatriciaNode*>& entries,
+    EntriesFetcherIterator(const PatriciaTreeIndex& tree,
+                           absl::flat_hash_set<PatriciaNodeIndex*>& entries,
                            const InternedStringSet& untracked_keys,
                            bool negate);
     bool Done() const override;
@@ -91,10 +93,9 @@ class Tag : public IndexBase {
     const InternedStringPtr& operator*() const override;
 
    private:
-    const PatriciaTree& tree_;
-    PatriciaTree::PrefixSubTreeIterator tree_iter_;
-    absl::flat_hash_set<PatriciaNode*>& entries_;
-    PatriciaNode* next_node_{nullptr};
+    PatriciaTreeIndex::PrefixSubTreeIterator tree_iter_;
+    absl::flat_hash_set<PatriciaNodeIndex*>& entries_;
+    PatriciaNodeIndex* next_node_{nullptr};
     InternedStringSet::const_iterator next_iter_;
     const InternedStringSet& untracked_keys_;
     bool negate_;
@@ -104,8 +105,8 @@ class Tag : public IndexBase {
 
   class EntriesFetcher : public EntriesFetcherBase {
    public:
-    EntriesFetcher(const PatriciaTree& tree,
-                   absl::flat_hash_set<PatriciaNode*> entries, size_t size,
+    EntriesFetcher(const PatriciaTreeIndex& tree,
+                   absl::flat_hash_set<PatriciaNodeIndex*> entries, size_t size,
                    bool negate, const InternedStringSet& untracked_keys)
         : tree_(tree),
           size_(size),
@@ -116,9 +117,9 @@ class Tag : public IndexBase {
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 
    private:
-    const PatriciaTree& tree_;
+    const PatriciaTreeIndex& tree_;
     size_t size_{0};
-    absl::flat_hash_set<PatriciaNode*> entries_;
+    absl::flat_hash_set<PatriciaNodeIndex*> entries_;
     bool negate_;
     const InternedStringSet& untracked_keys_;
   };
@@ -148,7 +149,7 @@ class Tag : public IndexBase {
   InternedStringSet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
   const char separator_;
   const bool case_sensitive_;
-  PatriciaTree tree_ ABSL_GUARDED_BY(index_mutex_);
+  PatriciaTreeIndex tree_ ABSL_GUARDED_BY(index_mutex_);
 };
 }  // namespace valkey_search::indexes
 

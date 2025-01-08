@@ -423,12 +423,12 @@ void ValkeySearch::OnForkChildCallback(RedisModuleCtx *ctx,
 absl::StatusOr<int> GetRedisLocalPort(RedisModuleCtx *ctx) {
   auto reply = vmsdk::UniquePtrRedisCallReply(
       RedisModule_Call(ctx, "CONFIG", "cc", "GET", "port"));
-  if (reply == NULL) {
+  if (reply == nullptr) {
     return absl::InternalError("Failed to get port configuration");
   }
   RedisModuleCallReply *port_reply =
       RedisModule_CallReplyArrayElement(reply.get(), 1);
-  const char *port_str = RedisModule_CallReplyStringPtr(port_reply, NULL);
+  const char *port_str = RedisModule_CallReplyStringPtr(port_reply, nullptr);
   int port;
   if (!absl::SimpleAtoi(port_str, &port)) {
     return absl::InternalError(
@@ -476,7 +476,7 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
     auto coordinator_port = coordinator::GetCoordinatorPort(redis_port);
     coordinator_ = coordinator::ServerImpl::Create(
         vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx),
-        reader_thread_pool_.get(), writer_thread_pool_.get(), coordinator_port);
+        reader_thread_pool_.get(), coordinator_port);
     if (coordinator_ == nullptr) {
       return absl::InternalError("Failed to create coordinator server");
     }

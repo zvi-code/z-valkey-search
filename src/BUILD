@@ -2,7 +2,6 @@ load("@com_google_protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
 load("@com_google_protobuf//bazel:proto_library.bzl", "proto_library")
 load("//vmsdk:redis_module_library.bzl", "redis_module_library")
 
-
 package(
     default_applicable_licenses = ["//:license"],
     default_visibility = [
@@ -15,7 +14,7 @@ package(
 #    --strip=never --config=online_debug_backtraces
 # For a release build, add the following parameter: --config=release
 redis_module_library(
-    name = "valkeysearch.so",
+    name = "valkeysearch",
     deps = [
         ":module_loader",
         ":server_events",

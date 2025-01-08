@@ -40,14 +40,14 @@ class GRPCSuspender {
 // gRPC callback so that new callbacks can be suspended prior to forking.
 class GRPCSuspensionGuard {
  public:
-  explicit GRPCSuspensionGuard(GRPCSuspender& GRPCSuspender)
-      : GRPCSuspender_(GRPCSuspender) {
-    GRPCSuspender_.Increment();
+  explicit GRPCSuspensionGuard(GRPCSuspender& grpc_suspender)
+      : grpc_suspender_(grpc_suspender) {
+    grpc_suspender_.Increment();
   }
-  ~GRPCSuspensionGuard() { GRPCSuspender_.Decrement(); }
+  ~GRPCSuspensionGuard() { grpc_suspender_.Decrement(); }
 
  private:
-  GRPCSuspender& GRPCSuspender_;
+  GRPCSuspender& grpc_suspender_;
 };
 
 }  // namespace valkey_search::coordinator

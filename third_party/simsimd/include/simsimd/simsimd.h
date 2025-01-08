@@ -112,6 +112,7 @@
 #endif
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wuninitialized"
 
 #ifdef __cplusplus
 extern "C" {

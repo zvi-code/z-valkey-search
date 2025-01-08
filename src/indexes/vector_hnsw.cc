@@ -227,6 +227,7 @@ int VectorHNSW<T>::_RespondWithInfo(RedisModuleCtx *ctx) const {
                        data_model::VectorIndex::AlgorithmCase::kHnswAlgorithm)
           .data());
   RedisModule_ReplyWithSimpleString(ctx, "m");
+  absl::ReaderMutexLock lock(&resize_mutex_);
   RedisModule_ReplyWithLongLong(ctx, GetM());
   RedisModule_ReplyWithSimpleString(ctx, "ef_construction");
   RedisModule_ReplyWithLongLong(ctx, GetEfConstruction());
@@ -365,7 +366,7 @@ void VectorHNSW<T>::_ToProto(
     data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_UNSPECIFIED;
   }
   vector_index_proto->set_vector_data_type(data_type);
-
+  absl::ReaderMutexLock lock(&resize_mutex_);
   auto hnsw_algorithm_proto = std::make_unique<data_model::HNSWAlgorithm>();
   hnsw_algorithm_proto->set_ef_construction(GetEfConstruction());
   hnsw_algorithm_proto->set_ef_runtime(GetEfRuntime());

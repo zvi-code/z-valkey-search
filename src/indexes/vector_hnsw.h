@@ -49,8 +49,8 @@ class VectorHNSW : public VectorBase {
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> LoadFromRDB(
       RedisModuleCtx* ctx, const AttributeDataType* attribute_data_type,
       const data_model::VectorIndex& vector_index_proto,
-      RDBInputStream& rdb_stream, absl::string_view attribute_identifier)
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      RDBInputStream& rdb_stream,
+      absl::string_view attribute_identifier) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   virtual ~VectorHNSW() = default;
   size_t GetDataTypeSize() const override { return sizeof(T); }
 
@@ -59,10 +59,19 @@ class VectorHNSW : public VectorBase {
   }
 
   int GetDimensions() const { return dimensions_; }
-  size_t GetCapacity() const override { return algo_->max_elements_; }
-  int GetM() const { return algo_->M_; }
-  int GetEfConstruction() const { return algo_->ef_construction_; }
-  size_t GetEfRuntime() const { return algo_->ef_; }
+  size_t GetCapacity() const override
+      ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+    return algo_->max_elements_;
+  }
+  int GetM() const ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+    return algo_->M_;
+  }
+  int GetEfConstruction() const ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+    return algo_->ef_construction_;
+  }
+  size_t GetEfRuntime() const ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+    return algo_->ef_;
+  }
   // Used just for testing
   void SetBlockSize(uint32_t block_size) { block_size_ = block_size; }
   absl::StatusOr<std::deque<Neighbor>> Search(

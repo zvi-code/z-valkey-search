@@ -1,22 +1,13 @@
-build --cxxopt=-std=c++20 --cxxopt=-fno-stack-protector --copt=-Wno-narrowing --copt=-fno-exceptions  --cxxopt=-Wno-missing-requires  --cxxopt=-Wno-comment
-build --copt=-Wno-maybe-uninitialized  --cxxopt=-Wno-changes-meaning --copt=-Wno-attributes
-# Remove security hardening as it clashes with nolibc
-build --copt -U_FORTIFY_SOURCE
-build --copt=-Wno-sign-compare
+build --cxxopt=-std=c++20
 build --copt=-fPIC
 build --jobs=auto
 build --copt=-DBAZEL_BUILD
-build --compilation_mode=opt
+build --copt=-Wno-unknown-pragmas
+
 build --copt=-falign-functions=5
-build --copt=-fpic
-build --copt=-fPIC
-build --copt=-fmerge-constants
 build --copt=-fmath-errno
 build --copt=-ffp-contract=off
 build --copt=-fno-rounding-math
-build --copt=-funwind-tables
-build --copt=-mcmodel=medium
-build --copt=-mlarge-data-threshold=65536
 build --copt=-march=x86-64
 build --copt=-maes
 build --copt=-mcx16
@@ -27,17 +18,7 @@ build --copt=-mavx
 build --copt=-mtune=generic
 build --copt=-gno-split-dwarf
 build --copt=-gdwarf-5
-build --copt=-zstd
-build --copt=-ffunction-sections
-build --copt=-fdata-sections
-build --copt=-DHASH_NAMESPACE=__gnu_cxx
-build --copt=-D__STDC_FORMAT_MACROS
-build --copt=-DSUPPRESS_USE_FILE_OFFSET64
-build --copt=-DUSE_HUGEPAGE_TEXT
-build --copt=-D_LIBCPP_REMOVE_TRANSITIVE_INCLUDES
-build --copt=-D_LIBCPP_ENABLE_REMOVED_ALLOCATOR_CONST
-build --copt=-D_LIBCPP_ENABLE_CXX20_REMOVED_UNCAUGHT_EXCEPTION
-build --copt=-DOS_LINUX
+build --copt=-gz=zlib
 build --copt=-O3
 build --copt=-ffast-math
 build --copt=-funroll-loops
@@ -45,8 +26,17 @@ build --copt=-ftree-vectorize
 build --copt=-fopenmp
 build --copt=-mavx2
 build --copt=-mfma
-build --copt=-Wuninitialized
-build --copt=-Wno-unknown-pragmas
+
+build --copt=-Werror
+
+build --copt=-ffp-contract=off
+build --copt=-flax-vector-conversions
+
+build -c opt
+test --copt=-O1
+test --compilation_mode=fastbuild
+
+# Suppress external/third_party warnings
 build --per_file_copt=external/.*@-w
 build --host_per_file_copt=external/.*@-w
 build --per_file_copt=third_party/.*@-w
@@ -54,56 +44,16 @@ build --host_per_file_copt=third_party/.*@-w
 build --per_file_copt=testing/.*@-Wno-overloaded-virtual
 build --host_per_file_copt=testing/.*@-Wno-overloaded-virtual
 
+# Suppress some warnings
+build --copt=-Wno-sign-compare
+build --copt=-Wno-uninitialized
 
-build --copt=-Werror
+try-import .bazelrc_local
 
-build --copt=-fdata-sections
-build --copt=-fexceptions
-build --copt=-ffp-contract=off
-build --copt=-ffunction-sections
-build --copt=-flax-vector-conversions
-build --copt=-fmath-errno
-build --copt=-fmerge-all-constants
-build --cxxopt=-fno-modules
-build --copt=-fno-rounding-math
-build --copt=-fno-signed-char
-build --copt=-fno-signed-zeros
-build --cxxopt=-fsized-deallocation
+build:clang --copt=-flto=auto
+build:clang --linkopt=-flto
+test:clang --copt=-fno-lto
+test:clang --linkopt=-fno-lto
+test:clang --copt=-Wno-potentially-evaluated-expression
 
-test --compilation_mode=fastbuild
-# Enabling thin lto
-build --copt=-flto=auto
-build --linkopt=-flto
-build --linkopt=-fuse-linker-plugin
-test --copt=-fno-lto
-test --linkopt=-fno-lto
-test --cxxopt=-O1
-
-# ASan: --config=asan
-build:asan --//gwpsan:sanitizer=asan
-build:asan --copt=-fsanitize=address
-build:asan --copt=-fsanitize-address-use-after-scope
-build:asan --copt=-fsanitize-address-use-after-return=runtime
-build:asan --copt=-DADDRESS_SANITIZER
-build:asan --linkopt=-fsanitize=address
-build:asan --cc_output_directory_tag=asan
-
-# MSan: --config=msan (Note: need MSan'ified stdlibs!)
-build:msan --//gwpsan:sanitizer=msan
-build:msan --copt=-fsanitize=memory
-build:msan --copt=-fsanitize-memory-track-origins
-build:msan --copt=-DMEMORY_SANITIZER
-build:msan --linkopt=-fsanitize=memory
-build:msan --cc_output_directory_tag=msan
-
-# ASan-enabled fuzzer: --config=asan-libfuzzer
-build:asan-libfuzzer --@rules_fuzzing//fuzzing:cc_engine=@rules_fuzzing//fuzzing/engines:libfuzzer
-build:asan-libfuzzer --@rules_fuzzing//fuzzing:cc_engine_instrumentation=libfuzzer
-build:asan-libfuzzer --@rules_fuzzing//fuzzing:cc_engine_sanitizer=asan
-build:asan-libfuzzer --cc_output_directory_tag=asan-libfuzzer
-
-# MSan-enabled fuzzer: --config=msan-libfuzzer
-build:msan-libfuzzer --@rules_fuzzing//fuzzing:cc_engine=@rules_fuzzing//fuzzing/engines:libfuzzer
-build:msan-libfuzzer --@rules_fuzzing//fuzzing:cc_engine_instrumentation=libfuzzer
-build:msan-libfuzzer --@rules_fuzzing//fuzzing:cc_engine_sanitizer=msan
-build:msan-libfuzzer --cc_output_directory_tag=msan-libfuzzer
+build:gcc --cxxopt=-Wno-missing-requires --cxxopt=-Wno-comment

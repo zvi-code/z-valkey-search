@@ -27,10 +27,10 @@
 
 namespace valkey_search::coordinator {
 
-typedef absl::AnyInvocable<void(grpc::Status, GetGlobalMetadataResponse&)>
-    GetGlobalMetadataCallback;
-typedef absl::AnyInvocable<void(grpc::Status, SearchIndexPartitionResponse&)>
-    SearchIndexPartitionCallback;
+using GetGlobalMetadataCallback =
+    absl::AnyInvocable<void(grpc::Status, GetGlobalMetadataResponse&)>;
+using SearchIndexPartitionCallback =
+    absl::AnyInvocable<void(grpc::Status, SearchIndexPartitionResponse&)>;
 
 class Client {
  public:
@@ -53,10 +53,10 @@ class ClientImpl : public Client {
   ClientImpl(const ClientImpl&) = delete;
   ClientImpl& operator=(const ClientImpl&) = delete;
 
-  void GetGlobalMetadata(GetGlobalMetadataCallback done);
+  void GetGlobalMetadata(GetGlobalMetadataCallback done) override;
   void SearchIndexPartition(
       std::unique_ptr<SearchIndexPartitionRequest> request,
-      SearchIndexPartitionCallback done);
+      SearchIndexPartitionCallback done) override;
 
  private:
   vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx_;

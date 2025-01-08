@@ -45,7 +45,7 @@ namespace valkey_search::indexes {
 
 template <typename T, typename Hasher = absl::Hash<T>,
           typename Equaler = std::equal_to<T>>
-class BTreeNumericIndex {
+class BTreeNumeric {
  public:
   using SetType = absl::flat_hash_set<T, Hasher, Equaler>;
   using ConstIterator = absl::btree_map<double, SetType>::const_iterator;
@@ -119,7 +119,7 @@ class Numeric : public IndexBase {
   const double* GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   using BTreeNumericIndex =
-      BTreeNumericIndex<InternedStringPtr, InternedStringPtrHash,
+      BTreeNumeric<InternedStringPtr, InternedStringPtrHash,
                         InternedStringPtrEqual>;
   using EntriesRange = std::pair<BTreeNumericIndex::ConstIterator,
                                  BTreeNumericIndex::ConstIterator>;

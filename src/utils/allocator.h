@@ -45,7 +45,7 @@ This approach enhances CPU cache locality and the formation of unutilized chunks
 which are deallocated.
 */
 
-class AllocatorChunk;
+struct AllocatorChunk;
 
 class Allocator {
  public:
@@ -84,7 +84,7 @@ class FixedSizeAllocator : public IntrusiveRefCount, public Allocator {
   }
   size_t ChunkCount() const ABSL_LOCKS_EXCLUDED(mutex_);
   ~FixedSizeAllocator();
-  size_t ChunkSize() const { return size_; }
+  size_t ChunkSize() const override { return size_; }
 
  protected:
   void Free(AllocatorChunk *chunk, char *ptr) override;

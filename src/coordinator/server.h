@@ -25,19 +25,17 @@
 #include "grpcpp/support/status.h"
 #include "src/coordinator/coordinator.grpc.pb.h"
 #include "src/coordinator/coordinator.pb.h"
-#include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/thread_pool.h"
 
 namespace valkey_search::coordinator {
 
 class Service final : public Coordinator::CallbackService {
  public:
   Service(vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx,
-          vmsdk::ThreadPool* reader_thread_pool,
-          vmsdk::ThreadPool* writer_thread_pool)
+          vmsdk::ThreadPool* reader_thread_pool)
       : detached_ctx_(std::move(detached_ctx)),
-        reader_thread_pool_(reader_thread_pool),
-        writer_thread_pool_(writer_thread_pool) {}
+        reader_thread_pool_(reader_thread_pool) {}
   Service(const Service&) = delete;
   Service& operator=(const Service&) = delete;
 
@@ -56,7 +54,6 @@ class Service final : public Coordinator::CallbackService {
  private:
   vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx_;
   vmsdk::ThreadPool* reader_thread_pool_;
-  vmsdk::ThreadPool* writer_thread_pool_;
 };
 
 class Server {
@@ -69,8 +66,7 @@ class ServerImpl final : public Server {
  public:
   static std::unique_ptr<Server> Create(
       vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx,
-      vmsdk::ThreadPool* reader_thread_pool,
-      vmsdk::ThreadPool* writer_thread_pool, uint16_t port);
+      vmsdk::ThreadPool* reader_thread_pool, uint16_t port);
   ServerImpl(const ServerImpl&) = delete;
   ServerImpl& operator=(const ServerImpl&) = delete;
   uint16_t GetPort() const override { return port_; }

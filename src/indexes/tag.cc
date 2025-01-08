@@ -47,7 +47,7 @@ absl::StatusOr<bool> Tag::AddRecord(const InternedStringPtr& key,
   auto parsed_tags = ParseRecordTags(*interned_data, separator_);
   absl::MutexLock lock(&index_mutex_);
   if (parsed_tags.empty()) {
-     untracked_keys_.insert(key);
+    untracked_keys_.insert(key);
     return false;
   }
   auto [_, succ] = tracked_tags_by_keys_.insert(
@@ -217,10 +217,10 @@ const absl::flat_hash_set<absl::string_view>* Tag::GetValue(
 }
 
 Tag::EntriesFetcherIterator::EntriesFetcherIterator(
-    const PatriciaTree& tree, absl::flat_hash_set<PatriciaNode*>& entries,
+    const PatriciaTreeIndex& tree,
+    absl::flat_hash_set<PatriciaNodeIndex*>& entries,
     const InternedStringSet& untracked_keys, bool negate)
-    : tree_(tree),
-      tree_iter_(tree.RootIterator()),
+    : tree_iter_(tree.RootIterator()),
       entries_(entries),
       untracked_keys_(untracked_keys),
       negate_(negate) {
@@ -295,14 +295,14 @@ const InternedStringPtr& Tag::EntriesFetcherIterator::operator*() const {
 // TODO: b/357027854 - Support Suffix/Infix Search
 std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
     const query::TagPredicate& predicate, bool negate) const {
-  absl::flat_hash_set<PatriciaNode*> entries;
+  absl::flat_hash_set<PatriciaNodeIndex*> entries;
   size_t size = 0;
 
   for (const auto& tag : predicate.GetTags()) {
     if (tag.back() == '*') {
       auto prefix_tag = tag.substr(0, tag.length() - 1);
       for (auto it = tree_.PrefixMatcher(prefix_tag); !it.Done(); it.Next()) {
-        PatriciaNode* node = it.Value();
+        PatriciaNodeIndex* node = it.Value();
         if (node != nullptr) {
           auto res = entries.insert(node);
           if (res.second) {
@@ -312,7 +312,7 @@ std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
       }
     } else {
       // exact search
-      PatriciaNode* node = tree_.ExactMatcher(tag);
+      PatriciaNodeIndex* node = tree_.ExactMatcher(tag);
       if (node != nullptr) {
         auto res = entries.insert(node);
         if (res.second) {

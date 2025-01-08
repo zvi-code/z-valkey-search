@@ -177,15 +177,14 @@ ServerImpl::ServerImpl(std::unique_ptr<Service> coordinator_service,
 
 std::unique_ptr<Server> ServerImpl::Create(
     vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx,
-    vmsdk::ThreadPool* reader_thread_pool,
-    vmsdk::ThreadPool* writer_thread_pool, uint16_t port) {
+    vmsdk::ThreadPool* reader_thread_pool, uint16_t port) {
   std::string server_address = absl::StrCat("[::]:", port);
 
   std::shared_ptr<grpc::ServerCredentials> creds =
       grpc::InsecureServerCredentials();
   auto ctx = detached_ctx.get();
-  auto coordinator_service = std::make_unique<Service>(
-      std::move(detached_ctx), reader_thread_pool, writer_thread_pool);
+  auto coordinator_service =
+      std::make_unique<Service>(std::move(detached_ctx), reader_thread_pool);
   grpc::ServerBuilder builder;
   builder.AddListeningPort(server_address, creds);
   builder.RegisterService(coordinator_service.get());

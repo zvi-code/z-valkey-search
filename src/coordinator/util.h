@@ -2,6 +2,7 @@
 #define VALKEYSEARCH_SRC_COORDINATOR_UTIL_H_
 
 #include <string>
+
 #include "absl/status/status.h"
 #include "grpcpp/support/status.h"
 #include "src/coordinator/coordinator.pb.h"
@@ -21,8 +22,9 @@ static constexpr int kCoordinatorPortOffset = 20294;
 
 inline int GetCoordinatorPort(int redis_port) {
   // TODO(jkmurphy) Make handling of TLS more robust
-  if (redis_port == 6378)
+  if (redis_port == 6378) {
     return redis_port + kCoordinatorPortOffset + 1;
+  }
   return redis_port + kCoordinatorPortOffset;
 }
 }  // namespace coordinator

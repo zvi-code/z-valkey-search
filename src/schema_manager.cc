@@ -610,7 +610,8 @@ absl::Status SchemaManager::StageIndicesFromAux(RedisModuleCtx *ctx,
   VMSDK_LOG(NOTICE, ctx) << "Staging " << aux_index_schema_count
                          << " indices from aux section of RDB.";
   for (int i = 0; i < aux_index_schema_count; ++i) {
-    VMSDK_ASSIGN_OR_RETURN(auto _, StageIndexFromRDB(ctx, rdb, encver));
+    VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto _,
+                           StageIndexFromRDB(ctx, rdb, encver));
   }
   return absl::OkStatus();
 }
@@ -657,7 +658,8 @@ absl::Status SchemaManager::LoadIndicesFromAux(RedisModuleCtx *ctx,
   VMSDK_LOG(NOTICE, ctx) << "Loading " << aux_index_schema_count
                          << " indices from aux section of RDB.";
   for (int i = 0; i < aux_index_schema_count; ++i) {
-    VMSDK_ASSIGN_OR_RETURN(auto _, LoadIndexFromRDB(ctx, rdb, encver));
+    VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto _,
+                           LoadIndexFromRDB(ctx, rdb, encver));
   }
   VectorExternalizer::Instance().ProcessEngineUpdateQueue();
   return absl::OkStatus();

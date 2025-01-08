@@ -33,6 +33,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "vmsdk/src/redismodule.h"
+#include "absl/log/check.h"
 
 namespace vmsdk {
 
@@ -49,7 +50,7 @@ inline void VerifyUpperCase(
 
 template <typename T>
 inline absl::StatusOr<T> To(absl::string_view str) {
-  static_assert(false);
+	CHECK(false);
 }
 
 template <>

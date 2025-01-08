@@ -33,9 +33,7 @@ void* (*__real_valloc)(size_t) = valloc;
 
 // Our allocator doesn't support tracking system memory size, so we just
 // return 0.
-inline __attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept {
-  return 0;
-}
+__attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept;
 }  // extern "C"
 
 extern "C" {

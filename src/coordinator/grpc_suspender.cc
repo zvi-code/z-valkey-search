@@ -23,7 +23,7 @@ absl::Status GRPCSuspender::Resume() {
   if (!suspended_) {
     return absl::FailedPreconditionError("Not suspended");
   }
-  DCHECK_EQ(count_, 0);
+  CHECK_EQ(count_, 0);
   suspended_ = false;
   resume_.SignalAll();
   return absl::OkStatus();

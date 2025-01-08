@@ -50,8 +50,8 @@ class VectorFlat : public VectorBase {
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> LoadFromRDB(
       RedisModuleCtx* ctx, const AttributeDataType* attribute_data_type,
       const data_model::VectorIndex& vector_index_proto,
-      RDBInputStream& rdb_stream, absl::string_view attribute_identifier)
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      RDBInputStream& rdb_stream,
+      absl::string_view attribute_identifier) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   virtual ~VectorFlat() = default;
   size_t GetDataTypeSize() const override { return sizeof(T); }
 
@@ -60,7 +60,10 @@ class VectorFlat : public VectorBase {
   }
   int GetDimensions() const { return dimensions_; }
   int GetBlockSize() const { return block_size_; }
-  size_t GetCapacity() const override { return algo_->data_->getCapacity(); }
+  size_t GetCapacity() const override
+      ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+    return algo_->data_->getCapacity();
+  }
   absl::StatusOr<std::deque<Neighbor>> Search(
       absl::string_view query, uint64_t count,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr)

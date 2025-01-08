@@ -33,6 +33,7 @@ extern "C" {
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wuninitialized"
 // clang-format off
 
 /*  Serial backends for all numeric types.

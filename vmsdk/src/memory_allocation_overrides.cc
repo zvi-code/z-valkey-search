@@ -141,6 +141,10 @@ void* PerformAndTrackAlignedAlloc(size_t align, size_t size,
 
 extern "C" {
 
+__attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept {
+  return 0;
+}
+
 void* __wrap_malloc(size_t size) noexcept {
   if (!vmsdk::IsUsingValkeyAlloc()) {
     auto ptr =
@@ -219,7 +223,7 @@ int __wrap_malloc_usable_size(void* ptr) noexcept {
   return RedisModule_MallocUsableSize(ptr);
 }
 int __wrap_posix_memalign(void** r, size_t __alignment,
-                          size_t __size) noexcept {
+                          size_t __size) noexcept{
   *r = __wrap_aligned_alloc(__alignment, __size);
   return 0;
 }
