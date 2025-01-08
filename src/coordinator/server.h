@@ -26,6 +26,7 @@
 #include "src/coordinator/coordinator.grpc.pb.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/redismodule.h"
 #include "vmsdk/src/thread_pool.h"
 
 namespace valkey_search::coordinator {
@@ -64,9 +65,9 @@ class Server {
 
 class ServerImpl final : public Server {
  public:
-  static std::unique_ptr<Server> Create(
-      vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx,
-      vmsdk::ThreadPool* reader_thread_pool, uint16_t port);
+  static std::unique_ptr<Server> Create(RedisModuleCtx* ctx,
+                                        vmsdk::ThreadPool* reader_thread_pool,
+                                        uint16_t port);
   ServerImpl(const ServerImpl&) = delete;
   ServerImpl& operator=(const ServerImpl&) = delete;
   uint16_t GetPort() const override { return port_; }
@@ -74,6 +75,7 @@ class ServerImpl final : public Server {
  private:
   ServerImpl(std::unique_ptr<Service> coordinator_service,
              std::unique_ptr<grpc::Server> server, uint16_t port);
+
   std::unique_ptr<Service> coordinator_service_{nullptr};
   std::unique_ptr<grpc::Server> server_{nullptr};
   uint16_t port_;

@@ -97,10 +97,6 @@ absl::StatusOr<Parameters> Load(RedisModuleString **argv, int argc) {
     parameters.writer_threads =
         std::max(1, static_cast<int>(parameters.threads.value() * 2.5));
   }
-  if (RedisModule_GetClusterSize() == 0 && parameters.use_coordinator) {
-    return absl::InvalidArgumentError(
-        "Coordinator is not supported in non-cluster mode");
-  }
   if ((parameters.reader_threads == 0 && parameters.writer_threads != 0) ||
       (parameters.reader_threads != 0 && parameters.writer_threads == 0)) {
     return absl::InvalidArgumentError(
@@ -458,8 +454,10 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
   if (options.log_level) {
     VMSDK_RETURN_IF_ERROR(vmsdk::InitLogging(ctx, options.log_level));
   }
-
-  if (options.use_coordinator) {
+  VMSDK_LOG(NOTICE, ctx) << "options.use_coordinator: "
+                         << options.use_coordinator
+                         << " IsCluster: " << IsCluster();
+  if (options.use_coordinator && IsCluster()) {
     client_pool_ = std::make_unique<coordinator::ClientPool>(
         vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx));
     coordinator::MetadataManager::InitInstance(
@@ -470,13 +468,12 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
   }
   SchemaManager::InitInstance(std::make_unique<SchemaManager>(
       ctx, server_events::SubscribeToServerEvents, writer_thread_pool_.get(),
-      options.use_coordinator));
+      options.use_coordinator && IsCluster()));
   if (options.use_coordinator) {
     VMSDK_ASSIGN_OR_RETURN(auto redis_port, GetRedisLocalPort(ctx));
     auto coordinator_port = coordinator::GetCoordinatorPort(redis_port);
     coordinator_ = coordinator::ServerImpl::Create(
-        vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx),
-        reader_thread_pool_.get(), coordinator_port);
+        ctx, reader_thread_pool_.get(), coordinator_port);
     if (coordinator_ == nullptr) {
       return absl::InternalError("Failed to create coordinator server");
     }

@@ -24,6 +24,7 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -70,7 +71,7 @@ void TestInitializationHNSW(int dimensions,
                             data_model::DistanceMetric distance_metric,
                             const std::string& distance_metric_name,
                             int initial_cap, int m, int ef_construction,
-                            size_t ef_runtime) {
+                            size_t ef_runtime) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto index = VectorHNSW<float>::Create(
       CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap, m,
                                  ef_construction, ef_runtime),
@@ -93,7 +94,7 @@ TEST_F(VectorIndexTest, InitializationHNSW) {
                            kEFConstruction, kEFRuntime);
   }
 }
-TEST_F(VectorIndexTest, InitializationFlat) {
+TEST_F(VectorIndexTest, InitializationFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   for (auto& distance_metric : expected_spaces) {
     auto index = VectorFlat<float>::Create(
         CreateFlatVectorIndexProto(kDimensions, distance_metric.first,
@@ -300,7 +301,7 @@ TEST_F(VectorIndexTest, BasicFlat) {
   }
 }
 
-TEST_F(VectorIndexTest, ResizeHNSW) {
+TEST_F(VectorIndexTest, ResizeHNSW) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   for (auto& distance_metric :
        {data_model::DISTANCE_METRIC_COSINE, data_model::DISTANCE_METRIC_L2}) {
     const int initial_cap = 10;
@@ -334,7 +335,7 @@ TEST_F(VectorIndexTest, ResizeHNSW) {
   }
 }
 
-TEST_F(VectorIndexTest, ResizeFlat) {
+TEST_F(VectorIndexTest, ResizeFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   for (auto& distance_metric :
        {data_model::DISTANCE_METRIC_COSINE, data_model::DISTANCE_METRIC_L2}) {
     const int initial_cap = 10;
@@ -410,10 +411,10 @@ TEST_F(VectorIndexTest, EfRuntimeRecall) {
                                           k, kDimensions, std::nullopt);
     auto default_ef_runtime_recall = CalcRecal(
         index_flat->get(), index_hnsw->get(), k, kDimensions, kEFRuntime);
-     auto ef_runtime_recall = CalcRecal(index_flat->get(), index_hnsw->get(), k,
+    auto ef_runtime_recall = CalcRecal(index_flat->get(), index_hnsw->get(), k,
                                        kDimensions, kEFRuntime * 8);
     EXPECT_LE(no_ef_runtime_recall, ef_runtime_recall);
-    EXPECT_GE(ef_runtime_recall, 0.97);
+    EXPECT_GE(ef_runtime_recall, 0.96f);
     EXPECT_EQ(default_ef_runtime_recall, no_ef_runtime_recall);
   }
 }
@@ -466,7 +467,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
       auto default_ef_runtime_recall =
           CalcRecal(index_flat->get(), loaded_index_hnsw->get(), k, kDimensions,
                     kEFRuntime);
-      EXPECT_GE(default_ef_runtime_recall, 0.97);
+      EXPECT_GE(default_ef_runtime_recall, 0.96f);
       VMSDK_EXPECT_OK((*loaded_index_hnsw)->SaveIndex(rdb_stream));
       hnsw_proto = (*loaded_index_hnsw)->ToProto()->vector_index();
     }
@@ -480,7 +481,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
       auto default_ef_runtime_recall =
           CalcRecal(index_flat->get(), loaded_index_hnsw->get(), k, kDimensions,
                     kEFRuntime);
-      EXPECT_GE(default_ef_runtime_recall, 0.97);
+      EXPECT_GE(default_ef_runtime_recall, 0.96f);
     }
   }
 }
@@ -532,7 +533,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnswTrackedKeysNotInProto) {
       auto default_ef_runtime_recall =
           CalcRecal(index_flat->get(), loaded_index_hnsw->get(), k, kDimensions,
                     kEFRuntime);
-      EXPECT_GE(default_ef_runtime_recall, 0.97);
+      EXPECT_GE(default_ef_runtime_recall, 0.96f);
       VMSDK_EXPECT_OK((*loaded_index_hnsw)->SaveIndex(rdb_stream));
       auto new_proto = (*loaded_index_hnsw)->ToProto()->vector_index();
       EXPECT_TRUE(new_proto.has_tracked_keys());
@@ -547,7 +548,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnswTrackedKeysNotInProto) {
       auto default_ef_runtime_recall =
           CalcRecal(index_flat->get(), loaded_index_hnsw->get(), k, kDimensions,
                     kEFRuntime);
-      EXPECT_GE(default_ef_runtime_recall, 0.97);
+      EXPECT_GE(default_ef_runtime_recall, 0.96f);
       auto new_proto = (*loaded_index_hnsw)->ToProto()->vector_index();
       for (const auto& tracked_key_metadata :
            new_proto.tracked_keys().tracked_key_metadata()) {

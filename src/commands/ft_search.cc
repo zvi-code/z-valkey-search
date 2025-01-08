@@ -238,6 +238,7 @@ absl::Status FTSearchCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
     };
 
     if (ValkeySearch::Instance().UsingCoordinator() &&
+        ValkeySearch::Instance().IsCluster() &&
         !parameters->local_only) {
       auto search_targets = query::fanout::GetSearchTargetsForFanout(ctx);
       return query::fanout::PerformSearchFanoutAsync(

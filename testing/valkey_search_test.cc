@@ -47,6 +47,7 @@ struct LoadTestCase {
   std::string args;
   std::optional<int> redis_port;
   bool cluster_mode;
+  bool use_coordinator{false};
   size_t expected_reader_thread_pool_size{0};
   size_t expected_writer_thread_pool_size{0};
   bool expected_coordinator_started{false};
@@ -121,6 +122,7 @@ INSTANTIATE_TEST_SUITE_P(
                     "--reader-threads 20",
             .redis_port = 1000,
             .cluster_mode = true,
+            .use_coordinator = true,
             .expected_reader_thread_pool_size = 20,
             .expected_writer_thread_pool_size = 10,
             .expected_coordinator_started = true,
@@ -139,9 +141,26 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "use_coordinator_not_cluster",
             .args = "--use-coordinator --writer-threads 10 "
                     "--reader-threads 20",
+            .redis_port = 1000,
             .cluster_mode = false,
+            .use_coordinator = true,
+            .expected_reader_thread_pool_size = 20,
+            .expected_writer_thread_pool_size = 10,
+            .expected_coordinator_started = true,
+            .expected_coordinator_port = 21294,  // 20294 larger than redis_port
+            .expect_thread_pool_started = true,
+        },
+        {
+            .test_name = "use_coordinator_not_cluster_fail_to_get_port",
+            .args = "--use-coordinator --writer-threads 10 "
+                    "--reader-threads 20",
+            .redis_port = std::nullopt,
+            .cluster_mode = false,
+            .use_coordinator = true,
+            .expected_reader_thread_pool_size = 20,
+            .expected_writer_thread_pool_size = 10,
             .expected_load_ret = 1,
-            .expect_thread_pool_started = false,
+            .expect_thread_pool_started = true,
         },
         {
             .test_name = "use_coordinator_fail_to_get_port",
@@ -149,6 +168,7 @@ INSTANTIATE_TEST_SUITE_P(
                     "--reader-threads 20",
             .redis_port = std::nullopt,
             .cluster_mode = true,
+            .use_coordinator = true,
             .expected_reader_thread_pool_size = 20,
             .expected_writer_thread_pool_size = 10,
             .expected_load_ret = 1,
@@ -200,9 +220,7 @@ TEST_P(LoadTest, load) {
             TestableSchemaManager::GetFakeSchemaManagerModuleType()));
   }
   std::string port_str;
-  if (test_case.cluster_mode) {
-    EXPECT_CALL(*kMockRedisModule, GetClusterSize())
-        .WillOnce(testing::Return(1));
+  if (test_case.use_coordinator) {
     if (test_case.redis_port.has_value()) {
       RedisModuleCallReply array_reply;
       RedisModuleCallReply string_reply;
@@ -217,6 +235,8 @@ TEST_P(LoadTest, load) {
       EXPECT_CALL(*kMockRedisModule,
                   CallReplyStringPtr(&string_reply, testing::_))
           .WillOnce(testing::Return(port_str.c_str()));
+      ON_CALL(*kMockRedisModule, GetMyClusterID())
+          .WillByDefault(testing::Return("test-cluster-id"));
     } else {
       EXPECT_CALL(
           *kMockRedisModule,
@@ -224,6 +244,10 @@ TEST_P(LoadTest, load) {
                testing::StrEq("GET"), testing::StrEq("port")))
           .WillOnce(testing::Return(nullptr));
     }
+  }
+  if (test_case.cluster_mode) {
+    EXPECT_CALL(*kMockRedisModule, GetContextFlags(&fake_ctx_))
+        .WillRepeatedly(testing::Return(REDISMODULE_CTX_FLAGS_CLUSTER));
     EXPECT_CALL(*kMockRedisModule,
                 CreateDataType(
                     &fake_ctx_,
@@ -237,6 +261,9 @@ TEST_P(LoadTest, load) {
             &fake_ctx_, coordinator::kMetadataBroadcastClusterMessageReceiverId,
             testing::_))
         .Times(1);
+  } else {
+    EXPECT_CALL(*kMockRedisModule, GetContextFlags(&fake_ctx_))
+        .WillRepeatedly(testing::Return(0));
   }
   vmsdk::module::Options options;
   EXPECT_EQ(vmsdk::module::LogOnLoad(ValkeySearch::Instance().OnLoad(

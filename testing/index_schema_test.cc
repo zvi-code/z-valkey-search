@@ -26,6 +26,7 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/log/log.h"
@@ -987,7 +988,7 @@ class IndexSchemaRDBTest : public ValkeySearchTest {
   RedisModuleType *fake_type_ = (RedisModuleType *)0xBADF00D1;
 };
 
-TEST_F(IndexSchemaRDBTest, SaveAndLoad) {
+TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS{
   std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};
   std::string index_schema_name_str("index_schema_name");
   int dimensions = 100;
@@ -1088,7 +1089,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) {
 
 // Load rdb file containing a vector index which was created with a package name
 // redis_query
-TEST_F(IndexSchemaRDBTest, LoadCompatability) {
+TEST_F(IndexSchemaRDBTest, LoadCompatability) ABSL_NO_THREAD_SAFETY_ANALYSIS{
   std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};
   std::string index_schema_name_str("index_schema_name");
   int dimensions = 100;

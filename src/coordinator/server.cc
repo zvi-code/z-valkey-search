@@ -20,10 +20,13 @@
 #include <string>
 #include <utility>
 
+
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/time/time.h"
 #include "grpc/grpc.h"
 #include "grpcpp/completion_queue.h"
+#include "grpcpp/health_check_service_interface.h"
 #include "grpcpp/security/server_credentials.h"
 #include "grpcpp/server_builder.h"
 #include "grpcpp/server_context.h"
@@ -169,22 +172,24 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
   return reactor;
 }
 
-ServerImpl::ServerImpl(std::unique_ptr<Service> coordinator_service,
-                       std::unique_ptr<grpc::Server> server, uint16_t port)
+ServerImpl::ServerImpl(
+    std::unique_ptr<Service> coordinator_service,
+    std::unique_ptr<grpc::Server> server,
+    
+    uint16_t port)
     : coordinator_service_(std::move(coordinator_service)),
       server_(std::move(server)),
+      
       port_(port) {}
 
 std::unique_ptr<Server> ServerImpl::Create(
-    vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx,
-    vmsdk::ThreadPool* reader_thread_pool, uint16_t port) {
+    RedisModuleCtx* ctx, vmsdk::ThreadPool* reader_thread_pool, uint16_t port) {
   std::string server_address = absl::StrCat("[::]:", port);
-
+  grpc::EnableDefaultHealthCheckService(true);
   std::shared_ptr<grpc::ServerCredentials> creds =
       grpc::InsecureServerCredentials();
-  auto ctx = detached_ctx.get();
-  auto coordinator_service =
-      std::make_unique<Service>(std::move(detached_ctx), reader_thread_pool);
+  auto coordinator_service = std::make_unique<Service>(
+      vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx), reader_thread_pool);
   grpc::ServerBuilder builder;
   builder.AddListeningPort(server_address, creds);
   builder.RegisterService(coordinator_service.get());
@@ -199,8 +204,9 @@ std::unique_ptr<Server> ServerImpl::Create(
   }
   VMSDK_LOG(NOTICE, ctx) << "Coordinator Server listening on "
                          << server_address;
-  return std::unique_ptr<Server>(
-      new ServerImpl(std::move(coordinator_service), std::move(server), port));
+  return std::unique_ptr<Server>(new ServerImpl(std::move(coordinator_service),
+                                                std::move(server),
+                                                port));
 }
 
 }  // namespace valkey_search::coordinator
