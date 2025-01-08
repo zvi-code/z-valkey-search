@@ -29,8 +29,16 @@ Known supported versions:
 - GCC >= 12.2.0
 - Clang >= 16.0.6
 
+### Invoke Build
+
+Run the following:
+
+```console
+bazel build //src:valkeysearch
+```
 
 If you want to use clang, run the following:
+
 ```console
 echo "build --config=clang" > .bazelrc_local
 ```
