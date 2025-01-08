@@ -29,21 +29,34 @@ Known supported versions:
 - GCC >= 12.2.0
 - Clang >= 16.0.6
 
-### Invoke Build
+### Building the Module
 
-Run the following:
+To perform a non-optimized build, use the following command:
 
 ```console
 bazel build //src:valkeysearch
 ```
 
-If you want to use clang, run the following:
+For an optimized binary, suitable for production or benchmarking, use:
+
+```console
+bazel build -c opt //src:valkeysearch
+```
+
+To include the symbol table:
+
+```console
+bazel build --copt=-g --linkopt=-g --strip=never //src:valkeysearch
+```
+
+To compile with clang:
 
 ```console
 echo "build --config=clang" > .bazelrc_local
+bazel build //src:valkeysearch
 ```
 
-## Testing with Bazel
+## Testing
 
 All the tests can be built and run with:
 
@@ -76,7 +89,7 @@ checker enabled in "normal" mode to detect leaks. For other mode options, see th
 heap checker [documentation](https://gperftools.github.io/gperftools/heap_checker.html). To
 disable the heap checker or change the mode, set the HEAPCHECK environment variable:
 
-```
+```console
 # Disables the heap checker
 bazel test //testing/... --test_env=HEAPCHECK=
 # Changes the heap checker to "minimal" mode
@@ -85,7 +98,7 @@ bazel test //testing/... --test_env=HEAPCHECK=minimal
 
 Bazel will by default cache successful test results. To force it to rerun tests:
 
-```
+```console
 bazel test  //testing:ft_search_test --cache_test_results=no
 ```
 
@@ -94,7 +107,16 @@ local filesystem. If you need to break out of the sandbox (for example to run un
 local script or tool with [`--run_under`](https://docs.bazel.build/versions/master/user-manual.html#flag--run_under)),
 you can run the test with `--strategy=TestRunner=local`, e.g.:
 
-```
+```console
 bazel test //testing:ft_search_test --strategy=TestRunner=local --run_under=/some/path/foobar.sh
 ```
 
+## Load the Module
+
+To load the module, execute the following command:
+
+```console
+/path/to/valkey-server "--loadmodule /path/to/libvalkeysearch.so  --reader-threads 64 --writer-threads 64"
+```
+
+For optimal performance, set the --reader-threads and --writer-threads parameters to match the number of vCPUs available on your machine.
