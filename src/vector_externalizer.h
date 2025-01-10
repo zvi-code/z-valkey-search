@@ -17,8 +17,6 @@
 #ifndef VALKEYSEARCH_SRC_VECTOR_EXTERNALIZER_H_
 #define VALKEYSEARCH_SRC_VECTOR_EXTERNALIZER_H_
 
-#include <stdbool.h>
-
 #include <cstddef>
 #include <memory>
 #include <optional>
@@ -34,7 +32,7 @@
 #include "src/utils/lru.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/utils.h"
 
 namespace valkey_search {
@@ -107,8 +105,7 @@ class VectorExternalizer {
   void Reset();
 
  private:
-  VectorExternalizer()
-      : lru_cache_(std::make_unique<LRU<LRUCacheEntry>>(kLRUCapacity)) {}
+  VectorExternalizer();
 
   vmsdk::MainThreadAccessGuard<InternedStringMap<
       absl::flat_hash_map<std::string, VectorExternalizerEntry>>>

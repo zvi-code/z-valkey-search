@@ -23,7 +23,7 @@
 #include "absl/hash/hash.h"
 #include "absl/synchronization/mutex.h"
 #include "vmsdk/src/memory_allocation.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 // clang-format off
 // We put this at the end since it will otherwise mangle the malloc symbols in
@@ -140,11 +140,11 @@ void* PerformAndTrackAlignedAlloc(size_t align, size_t size,
 }  // namespace vmsdk
 
 extern "C" {
-
+// Our allocator doesn't support tracking system memory size, so we just
+// return 0.
 __attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept {
   return 0;
 }
-
 void* __wrap_malloc(size_t size) noexcept {
   if (!vmsdk::IsUsingValkeyAlloc()) {
     auto ptr =
@@ -223,7 +223,7 @@ int __wrap_malloc_usable_size(void* ptr) noexcept {
   return RedisModule_MallocUsableSize(ptr);
 }
 int __wrap_posix_memalign(void** r, size_t __alignment,
-                          size_t __size) noexcept{
+                          size_t __size) {
   *r = __wrap_aligned_alloc(__alignment, __size);
   return 0;
 }

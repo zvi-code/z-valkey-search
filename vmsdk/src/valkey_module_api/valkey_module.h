@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef VMSDK_SRC_REDISMODULE_H
-#define VMSDK_SRC_REDISMODULE_H
+#ifndef VMSDK_SRC_VALKEY_MODULE_API_VALKEY_MODULE_H
+#define VMSDK_SRC_VALKEY_MODULE_API_VALKEY_MODULE_H
 
 #include <sys/types.h>
 #include <stdint.h>
@@ -1722,4 +1722,4 @@ static int RedisModule_Init(RedisModuleCtx *ctx, const char *name, int ver, int 
 #define RedisModuleString robj
 
 #endif /* REDISMODULE_CORE */
-#endif /* VMSDK_SRC_REDISMODULE_H */
+#endif /* VMSDK_SRC_VALKEY_MODULE_API_VALKEY_MODULE_H */

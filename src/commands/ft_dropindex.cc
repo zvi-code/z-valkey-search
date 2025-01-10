@@ -17,7 +17,7 @@
 #include "src/commands/commands.h"
 #include "src/schema_manager.h"
 #include "vmsdk/src/utils.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 
@@ -27,7 +27,7 @@ absl::Status FTDropIndexCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
                          int argc) {
   if (argc != 2) {
     return absl::InvalidArgumentError(
-        vmsdk::WrongArity(kDropIndexCommand).c_str());
+        vmsdk::WrongArity(kDropIndexCommand));
   }
   auto index_schema_name = vmsdk::ToStringView(argv[1]);
 

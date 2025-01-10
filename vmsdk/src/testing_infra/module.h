@@ -36,7 +36,7 @@
 #include "absl/log/check.h"
 #include "absl/strings/str_format.h"
 #include "vmsdk/src/log.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 
@@ -292,6 +292,8 @@ inline int TestRedisModule_UnblockClient(RedisModuleBlockedClient *bc,
                                          void *privdata) {
   return kMockRedisModule->UnblockClient(bc, privdata);
 }
+
+struct RedisModuleBlockedClient {};
 
 // Simple test implementation of RedisModuleString
 struct RedisModuleString {

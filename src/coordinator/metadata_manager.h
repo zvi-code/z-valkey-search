@@ -30,7 +30,7 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/utils.h"
 
 namespace valkey_search::coordinator {

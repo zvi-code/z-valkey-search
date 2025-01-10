@@ -32,11 +32,8 @@ InternedString::InternedString(absl::string_view str, bool shared)
   data_[length_] = '\0';
 }
 
-InternedString::InternedString(char *data, size_t length)
-    : data_(data),
-      length_(length),
-      is_shared_(true),
-      is_data_owner_(false) {}
+InternedString::InternedString(char* data, size_t length)
+    : data_(data), length_(length), is_shared_(true), is_data_owner_(false) {}
 
 InternedString::~InternedString() {
   if (is_shared_) {
@@ -49,7 +46,7 @@ InternedString::~InternedString() {
   }
 }
 
-void StringInternStore::Release(InternedString *str) {
+void StringInternStore::Release(InternedString* str) {
   absl::MutexLock lock(&mutex_);
   auto it = str_to_interned_.find(*str);
   if (it == str_to_interned_.end()) {
@@ -66,10 +63,10 @@ void StringInternStore::Release(InternedString *str) {
 
 std::shared_ptr<InternedString> StringInternStore::Intern(
     absl::string_view str, Allocator* allocator) {
-  return Instance()._Intern(str, allocator);
+  return Instance().InternImpl(str, allocator);
 }
 
-std::shared_ptr<InternedString> StringInternStore::_Intern(
+std::shared_ptr<InternedString> StringInternStore::InternImpl(
     absl::string_view str, Allocator* allocator) {
   absl::MutexLock lock(&mutex_);
   auto it = str_to_interned_.find(str);
@@ -83,8 +80,8 @@ std::shared_ptr<InternedString> StringInternStore::_Intern(
     auto buffer = allocator->Allocate(str.size() + 1);
     memcpy(buffer, str.data(), str.size());
     buffer[str.size()] = '\0';
-    interned_string = std::shared_ptr<InternedString>(
-        new InternedString(buffer, str.size()));
+    interned_string =
+        std::shared_ptr<InternedString>(new InternedString(buffer, str.size()));
   } else {
     interned_string =
         std::shared_ptr<InternedString>(new InternedString(str, true));

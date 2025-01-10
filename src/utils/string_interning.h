@@ -18,6 +18,7 @@
 #define VALKEYSEARCH_SRC_UTILS_STRING_INTERNING_H_
 
 #include <stdbool.h>
+
 #include <cstddef>
 #include <memory>
 
@@ -41,9 +42,8 @@ class StringInternStore {
     static StringInternStore *instance = new StringInternStore();
     return *instance;
   }
-  static std::shared_ptr<InternedString> Intern(
-      absl::string_view str,
-      Allocator* allocator = nullptr);
+  static std::shared_ptr<InternedString> Intern(absl::string_view str,
+                                                Allocator *allocator = nullptr);
 
   size_t Size() const {
     absl::MutexLock lock(&mutex_);
@@ -52,8 +52,8 @@ class StringInternStore {
 
  private:
   StringInternStore() = default;
-  std::shared_ptr<InternedString> _Intern(absl::string_view str,
-                                          Allocator* allocator);
+  std::shared_ptr<InternedString> InternImpl(absl::string_view str,
+                                             Allocator *allocator);
   void Release(InternedString *str);
   absl::flat_hash_map<absl::string_view, std::weak_ptr<InternedString>>
       str_to_interned_ ABSL_GUARDED_BY(mutex_);
@@ -76,7 +76,7 @@ class InternedString {
 
   ~InternedString();
 
-  absl::string_view Str() const { return absl::string_view(data_, length_); }
+  absl::string_view Str() const { return {data_, length_}; }
   operator absl::string_view() const { return Str(); }
   absl::string_view operator*() const { return Str(); }
 
@@ -90,7 +90,7 @@ class InternedString {
   bool is_data_owner_;
 };
 
-typedef std::shared_ptr<InternedString> InternedStringPtr;
+using InternedStringPtr = std::shared_ptr<InternedString>;
 
 struct InternedStringPtrHash {
   template <typename T>

@@ -4,7 +4,7 @@
 #include "src/keyspace_event_manager.h"
 #include "src/valkey_search.h"
 #include "vmsdk/src/module.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace {
 

@@ -45,7 +45,7 @@
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_type.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/utils.h"
@@ -55,8 +55,8 @@ namespace valkey_search {
 constexpr absl::string_view kIndexSchemaModuleTypeName{"IndxSc-RQ"};
 constexpr absl::string_view kIndexSchemaKeyPrefix{"redis-query-index-schema:"};
 
-typedef void *(*RDBLoadFunc)(RedisModuleIO *rdb, int encoding_version);
-typedef void (*FreeFunc)(void *value);
+using RDBLoadFunc = void *(*)(RedisModuleIO *, int);
+using FreeFunc = void (*)(void *);
 
 class IndexSchema : public vmsdk::ModuleType,
                     public KeyspaceEventSubscription,
@@ -86,7 +86,7 @@ class IndexSchema : public vmsdk::ModuleType,
       RedisModuleCtx *ctx, const data_model::IndexSchema &index_schema,
       RedisModuleType *module_type, vmsdk::ThreadPool *mutations_thread_pool,
       std::unique_ptr<data_model::IndexSchema_Stats> stats = nullptr);
-  virtual ~IndexSchema();
+  ~IndexSchema() override;
   static absl::StatusOr<RedisModuleType *> CreateModuleType(
       RedisModuleCtx *ctx, RDBLoadFunc rdb_load_func);
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
@@ -164,7 +164,7 @@ class IndexSchema : public vmsdk::ModuleType,
   void MarkAsDestructing();
   void ProcessMultiQueue();
   void SubscribeToVectorExternalizer(absl::string_view attribute_identifier,
-                                 indexes::VectorBase *vector_index);
+                                     indexes::VectorBase *vector_index);
 
  protected:
   IndexSchema(RedisModuleCtx *ctx,
@@ -208,8 +208,8 @@ class IndexSchema : public vmsdk::ModuleType,
   absl::flat_hash_map<std::string, indexes::VectorBase *>
       vector_externalizer_subscriptions_;
   void VectorExternalizer(const InternedStringPtr &key,
-                      absl::string_view attribute_identifier,
-                      vmsdk::UniqueRedisString &record);
+                          absl::string_view attribute_identifier,
+                          vmsdk::UniqueRedisString &record);
 
   mutable Stats stats_;
 
@@ -240,7 +240,7 @@ class IndexSchema : public vmsdk::ModuleType,
                               const Attribute &attribute);
 
   bool TrackMutatedRecord(RedisModuleCtx *ctx, const InternedStringPtr &key,
-                         MutatedAttributes &&mutated_attributes,
+                          MutatedAttributes &&mutated_attributes,
                           bool from_backfill, bool block_client)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(

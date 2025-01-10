@@ -52,14 +52,14 @@ constexpr static uint32_t kBlockSize = 250;
 constexpr static int kM = 16;
 constexpr static int kEFConstruction = 20;
 constexpr static int kEFRuntime = 20;
-const hnswlib::InnerProductSpace inner_product_space{kDimensions};
-const hnswlib::L2Space l2_space{kDimensions};
+const hnswlib::InnerProductSpace kInnerProductSpace{kDimensions};
+const hnswlib::L2Space kL2Space{kDimensions};
 const absl::flat_hash_map<data_model::DistanceMetric, std::string>
-    expected_spaces = {
+    kExpectedSpaces = {
         {data_model::DISTANCE_METRIC_COSINE,
-         typeid(inner_product_space).name()},
-        {data_model::DISTANCE_METRIC_IP, typeid(inner_product_space).name()},
-        {data_model::DISTANCE_METRIC_L2, typeid(l2_space).name()},
+         typeid(kInnerProductSpace).name()},
+        {data_model::DISTANCE_METRIC_IP, typeid(kInnerProductSpace).name()},
+        {data_model::DISTANCE_METRIC_L2, typeid(kL2Space).name()},
 };
 
 class VectorIndexTest : public ValkeySearchTest {
@@ -77,7 +77,8 @@ void TestInitializationHNSW(int dimensions,
                                  ef_construction, ef_runtime),
       "attribute_identifier_1",
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-  EXPECT_EQ(distance_metric_name, typeid(*(index.value()->GetSpace())).name());
+  auto* space = index.value()->GetSpace();
+  EXPECT_EQ(distance_metric_name, typeid(*space).name());
   EXPECT_EQ(index.value()->GetDimensions(), dimensions);
   EXPECT_EQ(index.value()->GetNormalize(),
             distance_metric == data_model::DISTANCE_METRIC_COSINE);
@@ -88,21 +89,21 @@ void TestInitializationHNSW(int dimensions,
 }
 
 TEST_F(VectorIndexTest, InitializationHNSW) {
-  for (auto& distance_metric : expected_spaces) {
+  for (auto& distance_metric : kExpectedSpaces) {
     TestInitializationHNSW(kDimensions, distance_metric.first,
                            distance_metric.second, kInitialCap, kM,
                            kEFConstruction, kEFRuntime);
   }
 }
 TEST_F(VectorIndexTest, InitializationFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
-  for (auto& distance_metric : expected_spaces) {
+  for (auto& distance_metric : kExpectedSpaces) {
     auto index = VectorFlat<float>::Create(
         CreateFlatVectorIndexProto(kDimensions, distance_metric.first,
                                    kInitialCap, kBlockSize),
         "attribute_identifier_1",
         data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-    EXPECT_EQ(distance_metric.second,
-              typeid(*(index.value()->GetSpace())).name());
+    auto* space = index.value()->GetSpace();
+    EXPECT_EQ(distance_metric.second, typeid(*space).name());
     EXPECT_EQ(index.value()->GetDimensions(), kDimensions);
     EXPECT_EQ(index.value()->GetNormalize(),
               distance_metric.first == data_model::DISTANCE_METRIC_COSINE);

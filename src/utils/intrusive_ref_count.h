@@ -4,8 +4,7 @@
 #include <memory>
 
 #define DEFINE_UNIQUE_PTR_TYPE(Type) \
-    using Unique##Type##Ptr = std::unique_ptr<Type, void(*)(Type*)>;
-
+  using Unique##Type##Ptr = std::unique_ptr<Type, void (*)(Type*)>;
 
 class IntrusiveRefCount {
  public:
@@ -34,6 +33,7 @@ class IntrusiveRefCount {
   std::atomic<int> ref_count_ = 0;
 };
 
-#define CreateUniquePtr(Type, ...) IntrusiveRefCount::Create<Type>(__VA_ARGS__)
+#define CREATE_UNIQUE_PTR(Type, ...) \
+  IntrusiveRefCount::Create<Type>(__VA_ARGS__)
 
 #endif  // VALKEYSEARCH_SRC_UTILS_INTRUSIVE_REF_COUNT_H_

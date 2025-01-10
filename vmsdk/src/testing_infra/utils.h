@@ -24,7 +24,7 @@
 #include "gtest/gtest.h"
 #include "absl/strings/string_view.h"
 #include "vmsdk/src/testing_infra/module.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 using ::testing::TestWithParam;
 

@@ -36,9 +36,9 @@ constexpr size_t kChunkBufferMinEntryiesPerChunk = 8;
 /*
 FixedSizeAllocator is responsible for allocating and managing contiguous
 memory chunks for a specific buffer size. Grouping buffers of identical sizes in
-the same allocator minimizes maintenance overhead and improves CPU cache locality,
-benefiting applications like vector search that frequently access same-sized
-buffers.
+the same allocator minimizes maintenance overhead and improves CPU cache
+locality, benefiting applications like vector search that frequently access
+same-sized buffers.
 
 The `FixedSizeAllocator` prioritizes allocation from heavily utilized chunks.
 This approach enhances CPU cache locality and the formation of unutilized chunks
@@ -83,7 +83,7 @@ class FixedSizeAllocator : public IntrusiveRefCount, public Allocator {
     return active_allocations_;
   }
   size_t ChunkCount() const ABSL_LOCKS_EXCLUDED(mutex_);
-  ~FixedSizeAllocator();
+  ~FixedSizeAllocator() override;
   size_t ChunkSize() const override { return size_; }
 
  protected:
@@ -101,7 +101,7 @@ class FixedSizeAllocator : public IntrusiveRefCount, public Allocator {
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   void SelectCurrentChunk() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   void AllocateChunk() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
-  void _Free(char *ptr) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  void FreeImpl(char *ptr) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   bool require_ptr_alignment_;
 };
 

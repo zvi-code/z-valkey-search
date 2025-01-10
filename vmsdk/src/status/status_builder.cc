@@ -13,8 +13,7 @@
 // limitations under the License.
 
 #include "vmsdk/src/status/status_builder.h"
-#include <cassert>
-#include <cstddef>
+
 #include <ios>
 #include <ostream>
 #include <streambuf>
@@ -23,35 +22,34 @@
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
 
 OStringStream::Streambuf::int_type OStringStream::Streambuf::overflow(int c) {
-  assert(str_);
+  CHECK(str_);
   if (!std::streambuf::traits_type::eq_int_type(
-          c, std::streambuf::traits_type::eof()))
+          c, std::streambuf::traits_type::eof())) {
     str_->push_back(static_cast<char>(c));
+  }
   return 1;
 }
 
 std::streamsize OStringStream::Streambuf::xsputn(const char* s,
                                                  std::streamsize n) {
-  assert(str_);
+  CHECK(str_);
   str_->append(s, static_cast<size_t>(n));
   return n;
 }
 
-StatusBuilder::StatusBuilder() {}
-
 StatusBuilder::Rep::Rep(const absl::Status& s) : status(s) {}
 StatusBuilder::Rep::Rep(absl::Status&& s) : status(std::move(s)) {}
-StatusBuilder::Rep::~Rep() {}
 
 StatusBuilder::Rep::Rep(const Rep& r)
     : status(r.status),
@@ -67,7 +65,9 @@ StatusBuilder::Rep::Rep(const Rep& r)
 absl::Status StatusBuilder::JoinMessageToStatus(absl::Status s,
                                                 absl::string_view msg,
                                                 MessageJoinStyle style) {
-  if (s.ok() || msg.empty()) return s;
+  if (s.ok() || msg.empty()) {
+    return s;
+  }
 
   std::string new_msg;
   if (style == MessageJoinStyle::kAnnotate) {
@@ -82,11 +82,13 @@ absl::Status StatusBuilder::JoinMessageToStatus(absl::Status s,
   } else {
     new_msg = absl::StrCat(s.message(), msg);
   }
-  return absl::Status(s.code(), new_msg);
+  return {s.code(), new_msg};
 }
 
 void StatusBuilder::ConditionallyLog(const absl::Status& status) const {
-  if (rep_->logging_mode == Rep::LoggingMode::kDisabled) return;
+  if (rep_->logging_mode == Rep::LoggingMode::kDisabled) {
+    return;
+  }
 
   switch (rep_->logging_mode) {
     case Rep::LoggingMode::kVLog: {

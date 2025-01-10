@@ -17,7 +17,7 @@
 #include "src/server_events.h"
 
 #include <cstdint>
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
 #include "src/coordinator/metadata_manager.h"

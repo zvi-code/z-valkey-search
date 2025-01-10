@@ -9,8 +9,8 @@ namespace valkey_search {
 
 namespace {
 struct Tester : public IntrusiveRefCount {
-  Tester(int _value, bool &_deleted) : value(_value), deleted(_deleted) {}
-  ~Tester() { deleted = true; }
+  Tester(int a_value, bool &a_deleted) : value(a_value), deleted(a_deleted) {}
+  ~Tester() override { deleted = true; }
   int value;
   bool &deleted;
 };
@@ -18,7 +18,7 @@ struct Tester : public IntrusiveRefCount {
 TEST(IntrusiveRefCountTest, SimpleRefCount) {
   bool deleted = false;
   {
-    auto ptr = CreateUniquePtr(Tester, 10, deleted);
+    auto ptr = CREATE_UNIQUE_PTR(Tester, 10, deleted);
     EXPECT_EQ(ptr->value, 10);
     EXPECT_FALSE(deleted);
     ptr->IncrementRef();
@@ -38,7 +38,7 @@ TEST(IntrusiveRefCountTest, SimpleRefCount) {
 
 DEFINE_UNIQUE_PTR_TYPE(Tester);
 
-void FunctionToRunInThread(int thread_id, Tester* ptr) {
+void FunctionToRunInThread(int thread_id, Tester *ptr) {
   for (int i = 0; i < 1000 * thread_id; ++i) {
     ptr->IncrementRef();
     ptr->DecrementRef();
@@ -50,7 +50,7 @@ TEST(IntrusiveRefCountTest, Concurrent) {
   std::vector<std::thread> threads;
   bool deleted = false;
   {
-    auto ptr = CreateUniquePtr(Tester, 10, deleted);
+    auto ptr = CREATE_UNIQUE_PTR(Tester, 10, deleted);
     for (int i = 0; i < num_threads; ++i) {
       threads.emplace_back(FunctionToRunInThread, i, ptr.get());
     }

@@ -24,7 +24,7 @@
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/utils.h"  // IWYU pragma: keep
 
 #define VALKEY_MODULE(options)                                              \
@@ -57,7 +57,7 @@ namespace vmsdk {
 namespace module {
 
 struct CommandOptions {
-  std::string cmd_name;
+  absl::string_view cmd_name;
   std::string permissions;
   RedisModuleCmdFunc cmd_func{nullptr};
   // By default - assume no keys.

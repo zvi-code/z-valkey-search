@@ -24,7 +24,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 
@@ -86,7 +86,7 @@ absl::StatusOr<RecordsMap> HashAttributeDataType::FetchAllRecords(
     return absl::NotFoundError(
         absl::StrCat("No such record with key: `", vector_identifier, "`"));
   }
-  if (!HashHasRecord(key_obj.get(), vector_identifier.c_str())) {
+  if (!HashHasRecord(key_obj.get(), vector_identifier)) {
     return absl::NotFoundError(absl::StrCat("No such record with identifier: `",
                                             vector_identifier, "`"));
   }

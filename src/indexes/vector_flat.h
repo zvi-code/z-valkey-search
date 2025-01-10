@@ -35,7 +35,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/rdb_io_stream.h"
 #include "src/utils/string_interning.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 
@@ -52,7 +52,7 @@ class VectorFlat : public VectorBase {
       const data_model::VectorIndex& vector_index_proto,
       RDBInputStream& rdb_stream,
       absl::string_view attribute_identifier) ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  virtual ~VectorFlat() = default;
+  ~VectorFlat() override = default;
   size_t GetDataTypeSize() const override { return sizeof(T); }
 
   const hnswlib::SpaceInterface<float>* GetSpace() const {
@@ -71,21 +71,21 @@ class VectorFlat : public VectorBase {
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::Status _AddRecord(uint64_t internal_id,
-                          absl::string_view record) override
+  absl::Status AddRecordImpl(uint64_t internal_id,
+                             absl::string_view record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
 
-  absl::Status _RemoveRecord(uint64_t internal_id) override
+  absl::Status RemoveRecordImpl(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::StatusOr<bool> _ModifyRecord(uint64_t internal_id,
-                                     absl::string_view record) override;
-  void _ToProto(data_model::VectorIndex* vector_index_proto) const override;
-  int _RespondWithInfo(RedisModuleCtx* ctx) const override;
-  absl::Status _SaveIndex(RDBOutputStream& rdb_stream) const override;
+  absl::StatusOr<bool> ModifyRecordImpl(uint64_t internal_id,
+                                        absl::string_view record) override;
+  void ToProtoImpl(data_model::VectorIndex* vector_index_proto) const override;
+  int RespondWithInfoImpl(RedisModuleCtx* ctx) const override;
+  absl::Status SaveIndexImpl(RDBOutputStream& rdb_stream) const override;
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-  _ComputeDistanceFromRecord(uint64_t internal_id,
-                             absl::string_view query) const override;
-  char* _GetValue(uint64_t internal_id) const override
+  ComputeDistanceFromRecordImpl(uint64_t internal_id,
+                                absl::string_view query) const override;
+  char* GetValueImpl(uint64_t internal_id) const override
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->getPoint(internal_id);
   }

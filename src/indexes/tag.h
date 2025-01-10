@@ -36,7 +36,7 @@
 #include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 
@@ -113,7 +113,7 @@ class Tag : public IndexBase {
           entries_(entries),
           negate_(negate),
           untracked_keys_(untracked_keys) {};
-    virtual size_t Size() const override;
+    size_t Size() const override;
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 
    private:

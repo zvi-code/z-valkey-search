@@ -22,7 +22,7 @@
 #include "absl/status/status.h"
 #include "third_party/hnswlib/iostream.h"
 #include "testing/common.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/testing_infra/module.h"
 
 namespace valkey_search {
@@ -43,7 +43,7 @@ TEST_F(RdbIoStreamTest, LoadSizeTSuccess) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(0));
   RDBInputStream rdb_stream(fake_redis_module_io_);
-  VMSDK_EXPECT_OK(rdb_stream.loadSizeT(actual_value));
+  VMSDK_EXPECT_OK(rdb_stream.LoadSizeT(actual_value));
   EXPECT_EQ(actual_value, expected_value);
 }
 
@@ -55,7 +55,7 @@ TEST_F(RdbIoStreamTest, LoadSizeTFailure) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(1));
   RDBInputStream rdb_stream(fake_redis_module_io_);
-  EXPECT_EQ(rdb_stream.loadSizeT(actual_value).code(),
+  EXPECT_EQ(rdb_stream.LoadSizeT(actual_value).code(),
             absl::StatusCode::kInternal);
 }
 
@@ -67,7 +67,7 @@ TEST_F(RdbIoStreamTest, LoadUnsignedSuccess) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(0));
   RDBInputStream rdb_stream(fake_redis_module_io_);
-  VMSDK_EXPECT_OK(rdb_stream.loadUnsigned(actual_value));
+  VMSDK_EXPECT_OK(rdb_stream.LoadUnsigned(actual_value));
   EXPECT_EQ(actual_value, expected_value);
 }
 
@@ -79,7 +79,7 @@ TEST_F(RdbIoStreamTest, LoadUnsignedFailure) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(1));
   RDBInputStream rdb_stream(fake_redis_module_io_);
-  EXPECT_EQ(rdb_stream.loadUnsigned(actual_value).code(),
+  EXPECT_EQ(rdb_stream.LoadUnsigned(actual_value).code(),
             absl::StatusCode::kInternal);
 }
 
@@ -91,7 +91,7 @@ TEST_F(RdbIoStreamTest, LoadSignedSuccess) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(0));
   RDBInputStream rdb_stream(fake_redis_module_io_);
-  VMSDK_EXPECT_OK(rdb_stream.loadSigned(actual_value));
+  VMSDK_EXPECT_OK(rdb_stream.LoadSigned(actual_value));
   EXPECT_EQ(actual_value, expected_value);
 }
 
@@ -103,7 +103,7 @@ TEST_F(RdbIoStreamTest, LoadSignedFailure) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(1));
   RDBInputStream rdb_stream(fake_redis_module_io_);
-  EXPECT_EQ(rdb_stream.loadSigned(actual_value).code(),
+  EXPECT_EQ(rdb_stream.LoadSigned(actual_value).code(),
             absl::StatusCode::kInternal);
 }
 
@@ -115,7 +115,7 @@ TEST_F(RdbIoStreamTest, LoadDoubleSuccess) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(0));
   RDBInputStream rdb_stream(fake_redis_module_io_);
-  VMSDK_EXPECT_OK(rdb_stream.loadDouble(actual_value));
+  VMSDK_EXPECT_OK(rdb_stream.LoadDouble(actual_value));
   EXPECT_EQ(actual_value, expected_value);
 }
 
@@ -127,7 +127,7 @@ TEST_F(RdbIoStreamTest, LoadDoubleFailure) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(1));
   RDBInputStream rdb_stream(fake_redis_module_io_);
-  EXPECT_EQ(rdb_stream.loadDouble(actual_value).code(),
+  EXPECT_EQ(rdb_stream.LoadDouble(actual_value).code(),
             absl::StatusCode::kInternal);
 }
 
@@ -142,7 +142,7 @@ TEST_F(RdbIoStreamTest, LoadStringBufferSuccess) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(0));
   RDBInputStream rdb_stream(fake_redis_module_io_);
-  auto actual_value_or = rdb_stream.loadStringBuffer(len);
+  auto actual_value_or = rdb_stream.LoadStringBuffer(len);
   VMSDK_EXPECT_OK(actual_value_or.status());
   EXPECT_EQ(actual_value_or.value().get(), expected_value_ptr);
 }
@@ -158,14 +158,14 @@ TEST_F(RdbIoStreamTest, LoadStringBufferFailureUnexpectedLength) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(0));
   RDBInputStream rdb_stream(fake_redis_module_io_);
-  EXPECT_EQ(rdb_stream.loadStringBuffer(len).status().code(),
+  EXPECT_EQ(rdb_stream.LoadStringBuffer(len).status().code(),
             absl::StatusCode::kInternal);
 }
 
 TEST_F(RdbIoStreamTest, LoadStringBufferFailureZeroLength) {
   size_t len = 0;
   RDBInputStream rdb_stream(fake_redis_module_io_);
-  EXPECT_EQ(rdb_stream.loadStringBuffer(len).status().code(),
+  EXPECT_EQ(rdb_stream.LoadStringBuffer(len).status().code(),
             absl::StatusCode::kInvalidArgument);
 }
 
@@ -179,7 +179,7 @@ TEST_F(RdbIoStreamTest, LoadStringBufferFailureRedisIOError) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(1));
   RDBInputStream rdb_stream(fake_redis_module_io_);
-  EXPECT_EQ(rdb_stream.loadStringBuffer(len).status().code(),
+  EXPECT_EQ(rdb_stream.LoadStringBuffer(len).status().code(),
             absl::StatusCode::kInternal);
 }
 
@@ -191,7 +191,7 @@ TEST_F(RdbIoStreamTest, LoadStringSuccess) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(0));
   RDBInputStream rdb_stream(fake_redis_module_io_);
-  auto actual_value_or = rdb_stream.loadString();
+  auto actual_value_or = rdb_stream.LoadString();
   VMSDK_EXPECT_OK(actual_value_or.status());
   EXPECT_EQ(actual_value_or.value().get(), expected_value);
 }
@@ -204,7 +204,7 @@ TEST_F(RdbIoStreamTest, LoadStringFailure) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(1));
   RDBInputStream rdb_stream(fake_redis_module_io_);
-  EXPECT_EQ(rdb_stream.loadString().status().code(),
+  EXPECT_EQ(rdb_stream.LoadString().status().code(),
             absl::StatusCode::kInternal);
 }
 
@@ -214,7 +214,7 @@ TEST_F(RdbIoStreamTest, SaveSizeTSuccess) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(0));
   RDBOutputStream rdb_stream(fake_redis_module_io_);
-  VMSDK_EXPECT_OK(rdb_stream.saveSizeT(value));
+  VMSDK_EXPECT_OK(rdb_stream.SaveSizeT(value));
 }
 
 TEST_F(RdbIoStreamTest, SaveSizeTFailure) {
@@ -223,7 +223,7 @@ TEST_F(RdbIoStreamTest, SaveSizeTFailure) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(1));
   RDBOutputStream rdb_stream(fake_redis_module_io_);
-  EXPECT_EQ(rdb_stream.saveSizeT(value).code(), absl::StatusCode::kInternal);
+  EXPECT_EQ(rdb_stream.SaveSizeT(value).code(), absl::StatusCode::kInternal);
 }
 
 TEST_F(RdbIoStreamTest, SaveUnsignedSuccess) {
@@ -232,7 +232,7 @@ TEST_F(RdbIoStreamTest, SaveUnsignedSuccess) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(0));
   RDBOutputStream rdb_stream(fake_redis_module_io_);
-  VMSDK_EXPECT_OK(rdb_stream.saveUnsigned(value));
+  VMSDK_EXPECT_OK(rdb_stream.SaveUnsigned(value));
 }
 
 TEST_F(RdbIoStreamTest, SaveUnsignedFailure) {
@@ -241,7 +241,7 @@ TEST_F(RdbIoStreamTest, SaveUnsignedFailure) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(1));
   RDBOutputStream rdb_stream(fake_redis_module_io_);
-  EXPECT_EQ(rdb_stream.saveUnsigned(value).code(), absl::StatusCode::kInternal);
+  EXPECT_EQ(rdb_stream.SaveUnsigned(value).code(), absl::StatusCode::kInternal);
 }
 
 TEST_F(RdbIoStreamTest, SaveSignedSuccess) {
@@ -250,7 +250,7 @@ TEST_F(RdbIoStreamTest, SaveSignedSuccess) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(0));
   RDBOutputStream rdb_stream(fake_redis_module_io_);
-  VMSDK_EXPECT_OK(rdb_stream.saveSigned(value));
+  VMSDK_EXPECT_OK(rdb_stream.SaveSigned(value));
 }
 
 TEST_F(RdbIoStreamTest, SaveSignedFailure) {
@@ -259,7 +259,7 @@ TEST_F(RdbIoStreamTest, SaveSignedFailure) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(1));
   RDBOutputStream rdb_stream(fake_redis_module_io_);
-  EXPECT_EQ(rdb_stream.saveSigned(value).code(), absl::StatusCode::kInternal);
+  EXPECT_EQ(rdb_stream.SaveSigned(value).code(), absl::StatusCode::kInternal);
 }
 
 TEST_F(RdbIoStreamTest, SaveDoubleSuccess) {
@@ -268,7 +268,7 @@ TEST_F(RdbIoStreamTest, SaveDoubleSuccess) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(0));
   RDBOutputStream rdb_stream(fake_redis_module_io_);
-  VMSDK_EXPECT_OK(rdb_stream.saveDouble(value));
+  VMSDK_EXPECT_OK(rdb_stream.SaveDouble(value));
 }
 
 TEST_F(RdbIoStreamTest, SaveDoubleFailure) {
@@ -277,7 +277,7 @@ TEST_F(RdbIoStreamTest, SaveDoubleFailure) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(1));
   RDBOutputStream rdb_stream(fake_redis_module_io_);
-  EXPECT_EQ(rdb_stream.saveDouble(value).code(), absl::StatusCode::kInternal);
+  EXPECT_EQ(rdb_stream.SaveDouble(value).code(), absl::StatusCode::kInternal);
 }
 
 TEST_F(RdbIoStreamTest, SaveStringBufferSuccess) {
@@ -288,7 +288,7 @@ TEST_F(RdbIoStreamTest, SaveStringBufferSuccess) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(0));
   RDBOutputStream rdb_stream(fake_redis_module_io_);
-  VMSDK_EXPECT_OK(rdb_stream.saveStringBuffer(value, len));
+  VMSDK_EXPECT_OK(rdb_stream.SaveStringBuffer(value, len));
 }
 
 TEST_F(RdbIoStreamTest, SaveStringBufferFailureIOError) {
@@ -299,14 +299,14 @@ TEST_F(RdbIoStreamTest, SaveStringBufferFailureIOError) {
   EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
       .WillOnce(testing::Return(1));
   RDBOutputStream rdb_stream(fake_redis_module_io_);
-  EXPECT_EQ(rdb_stream.saveStringBuffer(value, len).code(),
+  EXPECT_EQ(rdb_stream.SaveStringBuffer(value, len).code(),
             absl::StatusCode::kInternal);
 }
 
 TEST_F(RdbIoStreamTest, SaveStringBufferFailureZeroLength) {
   const char* value = "test";
   RDBOutputStream rdb_stream(fake_redis_module_io_);
-  EXPECT_EQ(rdb_stream.saveStringBuffer(value, 0).code(),
+  EXPECT_EQ(rdb_stream.SaveStringBuffer(value, 0).code(),
             absl::StatusCode::kInvalidArgument);
 }
 

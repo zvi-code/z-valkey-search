@@ -50,10 +50,7 @@ build --copt=-Wno-uninitialized
 
 try-import .bazelrc_local
 
-build:clang --copt=-flto=auto
-build:clang --linkopt=-flto
-test:clang --copt=-fno-lto
-test:clang --linkopt=-fno-lto
-test:clang --copt=-Wno-potentially-evaluated-expression
+build:lto --copt=-flto=auto
+build:lto --linkopt=-flto
 
 build:gcc --cxxopt=-Wno-missing-requires --cxxopt=-Wno-comment

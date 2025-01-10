@@ -13,7 +13,7 @@
 #include "absl/log/log_entry.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/thread_pool.h"

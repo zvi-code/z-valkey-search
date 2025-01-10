@@ -42,7 +42,7 @@
 #include "src/rdb_io_stream.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/log.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 
 // Note that the ordering matters here - we want to minimize the memory
@@ -108,7 +108,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     index->algo_ =
         std::make_unique<hnswlib::BruteforceSearch<T>>(index->space_.get());
     VMSDK_RETURN_IF_ERROR(
-        index->algo_->loadIndex(rdb_stream, index->space_.get(), index.get()));
+        index->algo_->LoadIndex(rdb_stream, index->space_.get(), index.get()));
     if (vector_index_proto.has_tracked_keys()) {
       VMSDK_RETURN_IF_ERROR(index->LoadTrackedKeys(
           ctx, attribute_data_type, vector_index_proto.tracked_keys()));
@@ -156,8 +156,8 @@ absl::Status VectorFlat<T>::ResizeIfFull() {
 }
 
 template <typename T>
-absl::Status VectorFlat<T>::_AddRecord(uint64_t internal_id,
-                                       absl::string_view record) {
+absl::Status VectorFlat<T>::AddRecordImpl(uint64_t internal_id,
+                                          absl::string_view record) {
   do {
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
@@ -180,8 +180,8 @@ absl::Status VectorFlat<T>::_AddRecord(uint64_t internal_id,
 }
 
 template <typename T>
-absl::StatusOr<bool> VectorFlat<T>::_ModifyRecord(uint64_t internal_id,
-                                                  absl::string_view record) {
+absl::StatusOr<bool> VectorFlat<T>::ModifyRecordImpl(uint64_t internal_id,
+                                                     absl::string_view record) {
   absl::ReaderMutexLock lock(&resize_mutex_);
   std::unique_lock<std::mutex> index_lock(algo_->index_lock);
   auto found = algo_->dict_external_to_internal.find(internal_id);
@@ -202,7 +202,7 @@ absl::StatusOr<bool> VectorFlat<T>::_ModifyRecord(uint64_t internal_id,
 }
 
 template <typename T>
-absl::Status VectorFlat<T>::_RemoveRecord(uint64_t internal_id) {
+absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     algo_->removePoint(internal_id);
@@ -251,8 +251,8 @@ absl::StatusOr<std::deque<Neighbor>> VectorFlat<T>::Search(
 
 template <typename T>
 absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-VectorFlat<T>::_ComputeDistanceFromRecord(uint64_t internal_id,
-                                          absl::string_view query) const {
+VectorFlat<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
+                                             absl::string_view query) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
   auto search = algo_->dict_external_to_internal.find(internal_id);
   if (search == algo_->dict_external_to_internal.end()) {
@@ -267,7 +267,7 @@ VectorFlat<T>::_ComputeDistanceFromRecord(uint64_t internal_id,
 }
 
 template <typename T>
-void VectorFlat<T>::_ToProto(
+void VectorFlat<T>::ToProtoImpl(
     data_model::VectorIndex *vector_index_proto) const {
   data_model::VectorDataType data_type;
   if constexpr (std::is_same_v<T, float>) {
@@ -285,7 +285,7 @@ void VectorFlat<T>::_ToProto(
 }
 
 template <typename T>
-int VectorFlat<T>::_RespondWithInfo(RedisModuleCtx *ctx) const {
+int VectorFlat<T>::RespondWithInfoImpl(RedisModuleCtx *ctx) const {
   RedisModule_ReplyWithSimpleString(ctx, "data_type");
   if constexpr (std::is_same_v<T, float>) {
     RedisModule_ReplyWithSimpleString(
@@ -311,9 +311,9 @@ int VectorFlat<T>::_RespondWithInfo(RedisModuleCtx *ctx) const {
 }
 
 template <typename T>
-absl::Status VectorFlat<T>::_SaveIndex(RDBOutputStream &rdb_stream) const {
+absl::Status VectorFlat<T>::SaveIndexImpl(RDBOutputStream &rdb_stream) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  return algo_->saveIndex(rdb_stream);
+  return algo_->SaveIndex(rdb_stream);
 }
 
 template class VectorFlat<float>;

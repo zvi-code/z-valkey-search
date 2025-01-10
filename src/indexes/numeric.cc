@@ -18,7 +18,7 @@
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 namespace {
@@ -192,7 +192,6 @@ Numeric::EntriesFetcherIterator::EntriesFetcherIterator(
   if (additional_entries_range_.has_value()) {
     additional_entries_iter_ = additional_entries_range_.value().first;
   }
-  Next();
 }
 
 bool Numeric::EntriesFetcherIterator::Done() const {
@@ -242,8 +241,10 @@ const InternedStringPtr& Numeric::EntriesFetcherIterator::operator*() const {
 size_t Numeric::EntriesFetcher::Size() const { return size_; }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Numeric::EntriesFetcher::Begin() {
-  return std::make_unique<EntriesFetcherIterator>(
+  auto itr = std::make_unique<EntriesFetcherIterator>(
       entries_range_, additional_entries_range_, untracked_keys_);
+  itr->Next();
+  return itr;
 }
 
 uint64_t Numeric::GetRecordCount() const {

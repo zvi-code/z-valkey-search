@@ -26,13 +26,12 @@
 #include "absl/log/log.h"
 #include "src/attribute_data_type.h"
 #include "src/utils/patricia_tree.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/utils.h"
 
 namespace valkey_search {
-
-typedef std::function<absl::Status(RedisModuleCtx *ctx, int types)>
-    StartSubscriptionFunction;
+using StartSubscriptionFunction =
+    std::function<absl::Status(RedisModuleCtx *, int)>;
 
 // KeyspaceEventSubscription is an interface for classes that want to subscribe
 // to keyspace events.
@@ -59,10 +58,7 @@ class KeyspaceEventSubscription {
 
 class KeyspaceEventManager {
  public:
-  KeyspaceEventManager()
-      : subscriptions_(),
-        subscription_trie_(/*case_sensitive=*/true),
-        subscribed_types_bit_mask_(0) {};
+  KeyspaceEventManager() = default;
   void NotifySubscribers(RedisModuleCtx *ctx, int type, const char *event,
                          RedisModuleString *key);
 
@@ -91,8 +87,8 @@ class KeyspaceEventManager {
       subscriptions_;
   // TODO: b/355561165 - Migrate to PatriciaTreeSet
   vmsdk::MainThreadAccessGuard<PatriciaTree<KeyspaceEventSubscription *>>
-      subscription_trie_;
-  int subscribed_types_bit_mask_;
+      subscription_trie_{/*case_sensitive=*/true};
+  int subscribed_types_bit_mask_{0};
 };
 
 }  // namespace valkey_search

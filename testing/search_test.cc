@@ -379,8 +379,12 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
 
     // Add record to tag index
     std::string tag_value = "LT10000";
-    if (i < 5) tag_value += ",LT5";
-    if (i < 3) tag_value += ",LT3";
+    if (i < 5) {
+      tag_value += ",LT5";
+    }
+    if (i < 3) {
+      tag_value += ",LT3";
+    }
     VMSDK_EXPECT_OK(tag_index->AddRecord(interned_key, tag_value));
   }
 
@@ -853,7 +857,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
     VMSDK_EXPECT_OK(test_case.expected_output);
     EXPECT_EQ(got->size(), test_case.expected_output->size());
 #ifndef BAZEL_BUILD
-// Fails on bazel with clang.
+    // Fails on bazel with clang.
     for (size_t i = 0; i < got->size(); ++i) {
       EXPECT_EQ(IndexedContentTestCase::TestNeighbor::FromIndexesNeighbor(
                     got.value()[i]),

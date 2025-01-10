@@ -35,7 +35,7 @@
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "vmsdk/src/module.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/thread_pool.h"
@@ -236,7 +236,8 @@ TEST_P(LoadTest, load) {
                   CallReplyStringPtr(&string_reply, testing::_))
           .WillOnce(testing::Return(port_str.c_str()));
       ON_CALL(*kMockRedisModule, GetMyClusterID())
-          .WillByDefault(testing::Return("test-cluster-id"));
+          .WillByDefault(
+              testing::Return("a415b9df6ce0c3c757ad4270242ae432147cacbb"));
     } else {
       EXPECT_CALL(
           *kMockRedisModule,
@@ -460,12 +461,12 @@ TEST_F(ValkeySearchTest, OnForkChildCallback) {
 class MockPthreadAtfork {
  public:
   MOCK_METHOD(int, pthread_atfork,
-              (void (*__prepare)(), void (*__parent)(), void (*__child)()), ());
+              (void (*prepare)(), void (*parent)(), void (*child)()), ());
 };
 MockPthreadAtfork mock_pthread_atfork;
 
-int pthread_atfork(void (*__prepare)(), void (*__parent)(), void (*__child)()) {
-  return mock_pthread_atfork.pthread_atfork(__prepare, __parent, __child);
+int pthread_atfork(void (*prepare)(), void (*parent)(), void (*child)()) {
+  return mock_pthread_atfork.pthread_atfork(prepare, parent, child);
 }
 
 }  // namespace valkey_search

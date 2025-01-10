@@ -43,7 +43,7 @@
 #include "src/rdb_io_stream.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/log.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
 
@@ -149,7 +149,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     // initial_cap needs to be provided to retain the original initial_cap if
     // the index being loaded is empty.
     VMSDK_RETURN_IF_ERROR(
-        index->algo_->loadIndex(rdb_stream, index->space_.get(),
+        index->algo_->LoadIndex(rdb_stream, index->space_.get(),
                                 vector_index_proto.initial_cap(), index.get()));
     // ef_runtime is not persisted in the index contents
     index->algo_->setEf(vector_index_proto.hnsw_algorithm().ef_runtime());
@@ -183,8 +183,8 @@ VectorHNSW<T>::VectorHNSW(int dimensions,
                  attribute_identifier) {}
 
 template <typename T>
-absl::Status VectorHNSW<T>::_AddRecord(uint64_t internal_id,
-                                       absl::string_view record) {
+absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
+                                          absl::string_view record) {
   do {
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
@@ -207,7 +207,7 @@ absl::Status VectorHNSW<T>::_AddRecord(uint64_t internal_id,
 }
 
 template <typename T>
-int VectorHNSW<T>::_RespondWithInfo(RedisModuleCtx *ctx) const {
+int VectorHNSW<T>::RespondWithInfoImpl(RedisModuleCtx *ctx) const {
   RedisModule_ReplyWithSimpleString(ctx, "data_type");
   if constexpr (std::is_same_v<T, float>) {
     RedisModule_ReplyWithSimpleString(
@@ -237,9 +237,9 @@ int VectorHNSW<T>::_RespondWithInfo(RedisModuleCtx *ctx) const {
 }
 
 template <typename T>
-absl::Status VectorHNSW<T>::_SaveIndex(RDBOutputStream &rdb_stream) const {
+absl::Status VectorHNSW<T>::SaveIndexImpl(RDBOutputStream &rdb_stream) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  return algo_->saveIndex(rdb_stream);
+  return algo_->SaveIndex(rdb_stream);
 }
 
 template <typename T>
@@ -277,8 +277,8 @@ absl::Status VectorHNSW<T>::ResizeIfFull() {
 }
 
 template <typename T>
-absl::StatusOr<bool> VectorHNSW<T>::_ModifyRecord(uint64_t internal_id,
-                                                  absl::string_view record) {
+absl::StatusOr<bool> VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
+                                                     absl::string_view record) {
   absl::ReaderMutexLock lock(&resize_mutex_);
   {
     std::unique_lock<std::mutex> lock_label(
@@ -307,7 +307,7 @@ absl::StatusOr<bool> VectorHNSW<T>::_ModifyRecord(uint64_t internal_id,
 }
 
 template <typename T>
-absl::Status VectorHNSW<T>::_RemoveRecord(uint64_t internal_id) {
+absl::Status VectorHNSW<T>::RemoveRecordImpl(uint64_t internal_id) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     algo_->markDelete(internal_id);
@@ -356,7 +356,7 @@ absl::StatusOr<std::deque<Neighbor>> VectorHNSW<T>::Search(
 }
 
 template <typename T>
-void VectorHNSW<T>::_ToProto(
+void VectorHNSW<T>::ToProtoImpl(
     data_model::VectorIndex *vector_index_proto) const {
   data_model::VectorDataType data_type;
   if constexpr (std::is_same_v<T, float>) {
@@ -377,8 +377,8 @@ void VectorHNSW<T>::_ToProto(
 
 template <typename T>
 absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-VectorHNSW<T>::_ComputeDistanceFromRecord(uint64_t internal_id,
-                                          absl::string_view query) const {
+VectorHNSW<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
+                                             absl::string_view query) const {
   auto id =
       hnswlib_helpers::GetInternalIdDuringSearch(algo_.get(), internal_id);
   if (!id.has_value()) {

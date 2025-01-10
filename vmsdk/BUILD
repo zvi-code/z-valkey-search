@@ -23,7 +23,6 @@ exports_files(srcs = [
 bzl_library(
     name = "redis_module_cc_test_bzl",
     srcs = ["redis_module_cc_test.bzl"],
-    deps = ["//devtools/build_cleaner/skylark:build_defs_lib"],
 )
 
 bzl_library(

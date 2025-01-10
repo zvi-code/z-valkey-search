@@ -44,7 +44,7 @@
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
@@ -175,11 +175,9 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
 ServerImpl::ServerImpl(
     std::unique_ptr<Service> coordinator_service,
     std::unique_ptr<grpc::Server> server,
-    
     uint16_t port)
     : coordinator_service_(std::move(coordinator_service)),
       server_(std::move(server)),
-      
       port_(port) {}
 
 std::unique_ptr<Server> ServerImpl::Create(
@@ -204,9 +202,8 @@ std::unique_ptr<Server> ServerImpl::Create(
   }
   VMSDK_LOG(NOTICE, ctx) << "Coordinator Server listening on "
                          << server_address;
-  return std::unique_ptr<Server>(new ServerImpl(std::move(coordinator_service),
-                                                std::move(server),
-                                                port));
+  return std::unique_ptr<Server>(
+      new ServerImpl(std::move(coordinator_service), std::move(server), port));
 }
 
 }  // namespace valkey_search::coordinator

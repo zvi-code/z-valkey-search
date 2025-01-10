@@ -26,7 +26,7 @@
 #include "absl/strings/string_view.h"
 #include "third_party/hnswlib/iostream.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
@@ -34,7 +34,7 @@ class RDBInputStream : public hnswlib::InputStream {
  public:
   explicit RDBInputStream(RedisModuleIO *rdb) : rdb_(rdb) {}
 
-  absl::Status loadSizeT(size_t &val) override {
+  absl::Status LoadSizeT(size_t &val) override {
     val = RedisModule_LoadUnsigned(rdb_);
     if (RedisModule_IsIOError(rdb_)) {
       return absl::InternalError("RedisModule_LoadUnsigned failed");
@@ -42,7 +42,7 @@ class RDBInputStream : public hnswlib::InputStream {
     return absl::OkStatus();
   }
 
-  absl::Status loadUnsigned(unsigned int &val) override {
+  absl::Status LoadUnsigned(unsigned int &val) override {
     val = RedisModule_LoadUnsigned(rdb_);
     if (RedisModule_IsIOError(rdb_)) {
       return absl::InternalError("RedisModule_LoadUnsigned failed");
@@ -50,7 +50,7 @@ class RDBInputStream : public hnswlib::InputStream {
     return absl::OkStatus();
   }
 
-  absl::Status loadSigned(int &val) override {
+  absl::Status LoadSigned(int &val) override {
     val = RedisModule_LoadSigned(rdb_);
     if (RedisModule_IsIOError(rdb_)) {
       return absl::InternalError("RedisModule_LoadSigned failed");
@@ -58,7 +58,7 @@ class RDBInputStream : public hnswlib::InputStream {
     return absl::OkStatus();
   }
 
-  absl::Status loadDouble(double &val) override {
+  absl::Status LoadDouble(double &val) override {
     val = RedisModule_LoadDouble(rdb_);
     if (RedisModule_IsIOError(rdb_)) {
       return absl::InternalError("RedisModule_LoadDouble failed");
@@ -66,7 +66,7 @@ class RDBInputStream : public hnswlib::InputStream {
     return absl::OkStatus();
   }
 
-  absl::StatusOr<hnswlib::StringBufferUniquePtr> loadStringBuffer(
+  absl::StatusOr<hnswlib::StringBufferUniquePtr> LoadStringBuffer(
       const size_t len) override {
     if (len == 0) {
       return absl::InvalidArgumentError("len must be > 0");
@@ -84,7 +84,7 @@ class RDBInputStream : public hnswlib::InputStream {
     return str;
   }
 
-  virtual absl::StatusOr<vmsdk::UniqueRedisString> loadString() {
+  virtual absl::StatusOr<vmsdk::UniqueRedisString> LoadString() {
     auto str = vmsdk::UniqueRedisString(RedisModule_LoadString(rdb_));
     if (RedisModule_IsIOError(rdb_)) {
       return absl::InternalError("RedisModule_LoadString failed");
@@ -103,7 +103,7 @@ class RDBOutputStream : public hnswlib::OutputStream {
  public:
   explicit RDBOutputStream(RedisModuleIO *rdb) : rdb_(rdb) {}
 
-  absl::Status saveSizeT(size_t val) override {
+  absl::Status SaveSizeT(size_t val) override {
     RedisModule_SaveUnsigned(rdb_, val);
     if (RedisModule_IsIOError(rdb_)) {
       return absl::InternalError("RedisModule_SaveUnsigned failed");
@@ -111,7 +111,7 @@ class RDBOutputStream : public hnswlib::OutputStream {
     return absl::OkStatus();
   }
 
-  absl::Status saveUnsigned(unsigned int val) override {
+  absl::Status SaveUnsigned(unsigned int val) override {
     RedisModule_SaveUnsigned(rdb_, val);
     if (RedisModule_IsIOError(rdb_)) {
       return absl::InternalError("RedisModule_SaveUnsigned failed");
@@ -119,7 +119,7 @@ class RDBOutputStream : public hnswlib::OutputStream {
     return absl::OkStatus();
   }
 
-  absl::Status saveSigned(int val) override {
+  absl::Status SaveSigned(int val) override {
     RedisModule_SaveSigned(rdb_, val);
     if (RedisModule_IsIOError(rdb_)) {
       return absl::InternalError("RedisModule_SaveSigned failed");
@@ -127,7 +127,7 @@ class RDBOutputStream : public hnswlib::OutputStream {
     return absl::OkStatus();
   }
 
-  absl::Status saveDouble(double val) override {
+  absl::Status SaveDouble(double val) override {
     RedisModule_SaveDouble(rdb_, val);
     if (RedisModule_IsIOError(rdb_)) {
       return absl::InternalError("RedisModule_SaveDouble failed");
@@ -135,7 +135,7 @@ class RDBOutputStream : public hnswlib::OutputStream {
     return absl::OkStatus();
   }
 
-  absl::Status saveStringBuffer(const char *str, size_t len) override {
+  absl::Status SaveStringBuffer(const char *str, size_t len) override {
     if (len == 0) {
       return absl::InvalidArgumentError("len must be > 0");
     }

@@ -26,7 +26,7 @@
 #include "src/coordinator/coordinator.grpc.pb.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/thread_pool.h"
 
 namespace valkey_search::coordinator {
@@ -40,7 +40,7 @@ class Service final : public Coordinator::CallbackService {
   Service(const Service&) = delete;
   Service& operator=(const Service&) = delete;
 
-  ~Service() = default;
+  ~Service() override = default;
 
   grpc::ServerUnaryReactor* GetGlobalMetadata(
       grpc::CallbackServerContext* context,

@@ -20,7 +20,18 @@ namespace vmsdk {
 class LatencySampler {
  public:
   LatencySampler(int64_t min_value, int64_t max_value, int precision)
-      : min_value_(min_value), max_value_(max_value), precision_(precision) {}
+      : min_value_(min_value),
+        max_value_(max_value),
+        precision_(precision),
+        sample_unit_(absl::Nanoseconds(1)),
+        reporting_unit_(absl::Microseconds(1)) {}
+  LatencySampler(int64_t min_value, int64_t max_value, int precision,
+                 absl::Duration sample_unit, absl::Duration reporting_unit)
+      : min_value_(min_value),
+        max_value_(max_value),
+        precision_(precision),
+        sample_unit_(sample_unit),
+        reporting_unit_(reporting_unit) {}
   ~LatencySampler() {
     if (initialized_) hdr_close(histogram_);
   }
@@ -37,7 +48,8 @@ class LatencySampler {
       hdr_init(min_value_, max_value_, precision_, &histogram_);
       initialized_ = true;
     }
-    hdr_record_value(histogram_, absl::ToInt64Nanoseconds(latency));
+    hdr_record_value(histogram_, absl::ToInt64Nanoseconds(latency) /
+                                     absl::ToInt64Nanoseconds(sample_unit_));
   }
   bool HasSamples() {
     absl::MutexLock lock(&histogram_lock_);
@@ -49,10 +61,13 @@ class LatencySampler {
     double p99 = 0;
     double p999 = 0;
     if (initialized_) {
-      double nano_to_micro = absl::ToDoubleMicroseconds(absl::Nanoseconds(1));
-      p50 = hdr_value_at_percentile(histogram_, 50) * nano_to_micro;
-      p99 = hdr_value_at_percentile(histogram_, 99) * nano_to_micro;
-      p999 = hdr_value_at_percentile(histogram_, 99.9) * nano_to_micro;
+      double sample_to_reporting_unit =
+          absl::ToDoubleMicroseconds(sample_unit_) /
+          absl::ToDoubleMicroseconds(reporting_unit_);
+      p50 = hdr_value_at_percentile(histogram_, 50) * sample_to_reporting_unit;
+      p99 = hdr_value_at_percentile(histogram_, 99) * sample_to_reporting_unit;
+      p999 =
+          hdr_value_at_percentile(histogram_, 99.9) * sample_to_reporting_unit;
     }
     return absl::StrFormat("p50=%.3f,p99=%.3f,p99.9=%.3f", p50, p99, p999);
   }
@@ -62,6 +77,8 @@ class LatencySampler {
   int64_t min_value_;
   int64_t max_value_;
   int precision_;
+  absl::Duration sample_unit_;
+  absl::Duration reporting_unit_;
   bool initialized_ ABSL_GUARDED_BY(histogram_lock_) = false;
   hdr_histogram *histogram_ ABSL_GUARDED_BY(histogram_lock_);
 };

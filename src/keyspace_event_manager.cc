@@ -23,7 +23,7 @@
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
 #include "src/vector_externalizer.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
@@ -102,7 +102,9 @@ absl::Status KeyspaceEventManager::InsertSubscription(
 absl::Status KeyspaceEventManager::StartRedisSubscribtionIfNeeded(
     RedisModuleCtx *ctx, int types) {
   int to_subscribe = types & ~subscribed_types_bit_mask_;
-  if (!to_subscribe) return absl::OkStatus();
+  if (!to_subscribe) {
+    return absl::OkStatus();
+  }
   if (RedisModule_SubscribeToKeyspaceEvents(
           ctx, to_subscribe, OnRedisKeyspaceNotification) != REDISMODULE_OK) {
     return absl::InternalError("failed to subscribe to keyspace events");

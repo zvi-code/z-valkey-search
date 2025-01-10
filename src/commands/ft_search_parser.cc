@@ -38,7 +38,7 @@
 #include "src/schema_manager.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 
@@ -236,11 +236,10 @@ CreateKParser() {
   return GENERATE_VALUE_PARSER(query::VectorSearchParameters, k);
 }
 
-typedef absl::Status (*FieldSetter)(absl::string_view param_variable,
-                                    query::VectorSearchParameters &parameters);
-
-typedef std::unique_ptr<::vmsdk::ParamParser<query::VectorSearchParameters>> (
-    *ValueParserGenerator)();
+using FieldSetter = absl::Status (*)(absl::string_view,
+                                     query::VectorSearchParameters &);
+using ValueParserGenerator =
+    std::unique_ptr<::vmsdk::ParamParser<query::VectorSearchParameters>> (*)();
 
 absl::Status HandlePrepareParseParam(
     vmsdk::KeyValueParser<query::VectorSearchParameters> &parser,
@@ -315,8 +314,8 @@ ConstuctReturnParser() {
               return absl::InvalidArgumentError("Unexpected parameter `AS` ");
             }
           }
-          parameters.return_attributes.emplace_back(query::ReturnAttribute(
-              std::move(identifier), std::move(as_property)));
+          parameters.return_attributes.emplace_back(query::ReturnAttribute{
+              std::move(identifier), std::move(as_property)});
         }
         return absl::OkStatus();
       });

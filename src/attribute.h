@@ -25,7 +25,7 @@
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 

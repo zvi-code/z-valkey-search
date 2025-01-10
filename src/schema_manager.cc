@@ -45,7 +45,7 @@
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 
@@ -238,7 +238,9 @@ absl::flat_hash_set<std::string> SchemaManager::GetIndexSchemasInDBInternal(
   // not be used in performance critical paths like FT.SEARCH.
   absl::flat_hash_set<std::string> names;
   auto db_itr = db_to_index_schemas_.find(db_num);
-  if (db_itr == db_to_index_schemas_.end()) return names;
+  if (db_itr == db_to_index_schemas_.end()) {
+    return names;
+  }
   for (const auto &[name, entry] : db_itr->second) {
     names.insert(name);
   }
@@ -337,7 +339,9 @@ bool SchemaManager::IsIndexingInProgress() const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
     for (const auto &[name, schema] : schema_map) {
-      if (schema->IsBackfillInProgress()) return true;
+      if (schema->IsBackfillInProgress()) {
+        return true;
+      }
     }
   }
   return false;
@@ -443,7 +447,9 @@ void SchemaManager::AddSchemasToKeyspace(RedisModuleCtx *ctx) {
 }
 
 void SchemaManager::OnSavingStarted(RedisModuleCtx *ctx) {
-  if (coordinator_enabled_) return;
+  if (coordinator_enabled_) {
+    return;
+  }
 
   // TODO(b/349436336) Remove this section when standalone moves to AUX-based
   // RDB save.
@@ -479,7 +485,9 @@ void SchemaManager::DeleteSchemasFromKeyspace(RedisModuleCtx *ctx) {
 }
 
 void SchemaManager::OnSavingEnded(RedisModuleCtx *ctx) {
-  if (coordinator_enabled_) return;
+  if (coordinator_enabled_) {
+    return;
+  }
 
   // TODO(b/349436336) Remove this section when standalone moves to AUX-based
   // RDB save.
@@ -726,11 +734,11 @@ void SchemaManager::OnServerCronCallback(RedisModuleCtx *ctx,
   SchemaManager::Instance().PerformBackfill(ctx, kIndexSchemaBackfillBatchSize);
 }
 
-void SchemaManager_OnAuxSaveCallback(RedisModuleIO *rdb, int when) {
+void SchemaManagerOnAuxSaveCallback(RedisModuleIO *rdb, int when) {
   SchemaManager::Instance().AuxSave(rdb, when);
 }
 
-int SchemaManager_OnAuxLoadCallback(RedisModuleIO *rdb, int encver, int when) {
+int SchemaManagerOnAuxLoadCallback(RedisModuleIO *rdb, int encver, int when) {
   return SchemaManager::Instance().OnAuxLoadCallback(rdb, encver, when);
 }
 
@@ -774,7 +782,7 @@ absl::StatusOr<void *> SchemaManager::IndexSchemaRDBLoad(RedisModuleIO *rdb,
   return index_schema_ptr;
 }
 
-void *SchemaManager_IndexSchemaRDBLoad(RedisModuleIO *rdb,
+void *SchemaManagerIndexSchemaRDBLoad(RedisModuleIO *rdb,
                                        int encoding_version) {
   auto res =
       SchemaManager::Instance().IndexSchemaRDBLoad(rdb, encoding_version);
@@ -792,7 +800,7 @@ void *SchemaManager_IndexSchemaRDBLoad(RedisModuleIO *rdb,
 absl::Status SchemaManager::RegisterModuleType(RedisModuleCtx *ctx) {
   VMSDK_ASSIGN_OR_RETURN(
       index_schema_module_type_,
-      IndexSchema::CreateModuleType(ctx, SchemaManager_IndexSchemaRDBLoad));
+      IndexSchema::CreateModuleType(ctx, SchemaManagerIndexSchemaRDBLoad));
   static RedisModuleTypeMethods tm = {
       .version = REDISMODULE_TYPE_METHOD_VERSION,
       .rdb_load = [](RedisModuleIO *io, int encver) -> void * {
@@ -811,7 +819,7 @@ absl::Status SchemaManager::RegisterModuleType(RedisModuleCtx *ctx) {
           [](void *value) {
             DCHECK(false) << "Attempt to free SchemaManager object";
           },
-      .aux_load = SchemaManager_OnAuxLoadCallback,
+      .aux_load = SchemaManagerOnAuxLoadCallback,
       // We want to save/load the metadata after the RDB.
       .aux_save_triggers = REDISMODULE_AUX_AFTER_RDB,
       // TODO(b/349436336) On Cluster mode, we don't need to maintain
@@ -821,7 +829,7 @@ absl::Status SchemaManager::RegisterModuleType(RedisModuleCtx *ctx) {
       // Once we have rolled out support fleetwide, we can switch to aux for
       // both.
       .aux_save2 =
-          coordinator_enabled_ ? SchemaManager_OnAuxSaveCallback : nullptr,
+          coordinator_enabled_ ? SchemaManagerOnAuxSaveCallback : nullptr,
   };
 
   auto schema_manager_module_type_ = RedisModule_CreateDataType(

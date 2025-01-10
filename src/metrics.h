@@ -113,7 +113,7 @@ class Metrics {
 
  private:
   mutable Stats stats_;
-  Metrics() {}
+  Metrics() = default;
   Metrics(const Metrics&) = delete;
   Metrics& operator=(const Metrics&) = delete;
 };

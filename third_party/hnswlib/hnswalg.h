@@ -102,7 +102,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         size_t max_elements = 0,
         bool allow_replace_deleted = false)
         : allow_replace_deleted_(allow_replace_deleted) {
-        loadIndex(location, s, max_elements);
+        LoadIndex(location, s, max_elements);
     }
 
     HierarchicalNSW(
@@ -711,22 +711,22 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         return size;
     }
 
-    absl::Status saveIndex(OutputStream &output) {
-      VMSDK_RETURN_IF_ERROR(output.saveUnsigned(ENCODING_VERSION));
-      VMSDK_RETURN_IF_ERROR(output.saveSizeT(offsetLevel0_));
-      VMSDK_RETURN_IF_ERROR(output.saveSizeT(max_elements_));
-      VMSDK_RETURN_IF_ERROR(output.saveSizeT(cur_element_count_));
-      VMSDK_RETURN_IF_ERROR(output.saveSizeT(serialize_size_data_per_element_));
-      VMSDK_RETURN_IF_ERROR(output.saveSizeT(label_offset_));
-      VMSDK_RETURN_IF_ERROR(output.saveSizeT(offsetData_));
-      VMSDK_RETURN_IF_ERROR(output.saveSigned(maxlevel_));
-      VMSDK_RETURN_IF_ERROR(output.saveUnsigned(enterpoint_node_));
-      VMSDK_RETURN_IF_ERROR(output.saveSizeT(maxM_));
+    absl::Status SaveIndex(OutputStream &output) {
+      VMSDK_RETURN_IF_ERROR(output.SaveUnsigned(ENCODING_VERSION));
+      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(offsetLevel0_));
+      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(max_elements_));
+      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(cur_element_count_));
+      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(serialize_size_data_per_element_));
+      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(label_offset_));
+      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(offsetData_));
+      VMSDK_RETURN_IF_ERROR(output.SaveSigned(maxlevel_));
+      VMSDK_RETURN_IF_ERROR(output.SaveUnsigned(enterpoint_node_));
+      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(maxM_));
 
-      VMSDK_RETURN_IF_ERROR(output.saveSizeT(maxM0_));
-      VMSDK_RETURN_IF_ERROR(output.saveSizeT(M_));
-      VMSDK_RETURN_IF_ERROR(output.saveDouble(mult_));
-      VMSDK_RETURN_IF_ERROR(output.saveSizeT(ef_construction_));
+      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(maxM0_));
+      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(M_));
+      VMSDK_RETURN_IF_ERROR(output.SaveDouble(mult_));
+      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(ef_construction_));
 
       if (cur_element_count_ == 0) return absl::OkStatus();
 
@@ -743,7 +743,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                  vector_size_);
         memcpy(buf + size_links_level0_ + vector_size_,
                (*data_level0_memory_)[i] + label_offset_, sizeof(labeltype));
-        VMSDK_RETURN_IF_ERROR(output.saveStringBuffer(
+        VMSDK_RETURN_IF_ERROR(output.SaveStringBuffer(
                 buf,
                 serialize_size_data_per_element_));
       };
@@ -753,9 +753,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             element_levels_[i] > 0
                 ? size_links_per_element_ * element_levels_[i]
                 : 0;
-        VMSDK_RETURN_IF_ERROR(output.saveUnsigned(linkListSize));
+        VMSDK_RETURN_IF_ERROR(output.SaveUnsigned(linkListSize));
         if (linkListSize) {
-          VMSDK_RETURN_IF_ERROR(output.saveStringBuffer(
+          VMSDK_RETURN_IF_ERROR(output.SaveStringBuffer(
                   *reinterpret_cast<char**>((*linkLists_)[i]),
                   linkListSize));
         }
@@ -763,7 +763,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       return absl::OkStatus();
     }
 
-    void saveIndex(const std::string &location) {
+    void SaveIndex(const std::string &location) {
       absl::StatusOr<std::unique_ptr<FileOutputStream>> output_or =
           FileOutputStream::Create(location);
       if (!output_or.ok()) {
@@ -771,45 +771,45 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             absl::StrCat("Error instantiating FileOutputStream ",
                          output_or.status().message()));
       }
-      absl::Status status = saveIndex(*output_or.value());
+      absl::Status status = SaveIndex(*output_or.value());
       if (!status.ok()) {
         throw std::runtime_error(
             absl::StrCat("Error saving index ", status.message()));
       }
     }
 
-    absl::Status loadIndex(InputStream &input, SpaceInterface<dist_t> *s,
+    absl::Status LoadIndex(InputStream &input, SpaceInterface<dist_t> *s,
                            size_t max_elements_i,
                            VectorTracker* vector_tracker) {
       clear();
 
       unsigned int encoding_version;
-      VMSDK_RETURN_IF_ERROR(input.loadUnsigned(encoding_version));
+      VMSDK_RETURN_IF_ERROR(input.LoadUnsigned(encoding_version));
       if (encoding_version != ENCODING_VERSION) {
         return absl::InvalidArgumentError(absl::StrCat(
             "Unsupported HNSW index encoding version ", encoding_version));
       }
-      VMSDK_RETURN_IF_ERROR(input.loadSizeT(offsetLevel0_));
-      VMSDK_RETURN_IF_ERROR(input.loadSizeT(max_elements_));
+      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(offsetLevel0_));
+      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(max_elements_));
 
       size_t temp_cur_element_count;
-      VMSDK_RETURN_IF_ERROR(input.loadSizeT(temp_cur_element_count));
+      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(temp_cur_element_count));
       cur_element_count_ = temp_cur_element_count;
 
       size_t max_elements = max_elements_i;
       if (max_elements < cur_element_count_) max_elements = max_elements_;
       max_elements_ = max_elements;
-      VMSDK_RETURN_IF_ERROR(input.loadSizeT(serialize_size_data_per_element_));
-      VMSDK_RETURN_IF_ERROR(input.loadSizeT(label_offset_));
-      VMSDK_RETURN_IF_ERROR(input.loadSizeT(offsetData_));
-      VMSDK_RETURN_IF_ERROR(input.loadSigned(maxlevel_));
-      VMSDK_RETURN_IF_ERROR(input.loadUnsigned(enterpoint_node_));
+      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(serialize_size_data_per_element_));
+      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(label_offset_));
+      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(offsetData_));
+      VMSDK_RETURN_IF_ERROR(input.LoadSigned(maxlevel_));
+      VMSDK_RETURN_IF_ERROR(input.LoadUnsigned(enterpoint_node_));
 
-      VMSDK_RETURN_IF_ERROR(input.loadSizeT(maxM_));
-      VMSDK_RETURN_IF_ERROR(input.loadSizeT(maxM0_));
-      VMSDK_RETURN_IF_ERROR(input.loadSizeT(M_));
-      VMSDK_RETURN_IF_ERROR(input.loadDouble(mult_));
-      VMSDK_RETURN_IF_ERROR(input.loadSizeT(ef_construction_));
+      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(maxM_));
+      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(maxM0_));
+      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(M_));
+      VMSDK_RETURN_IF_ERROR(input.LoadDouble(mult_));
+      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(ef_construction_));
 
       size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
 
@@ -829,7 +829,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       for (size_t i = 0; i < cur_element_count_; i++) {
         VMSDK_ASSIGN_OR_RETURN(
                 StringBufferUniquePtr buf,
-                input.loadStringBuffer(serialize_size_data_per_element_));
+                input.LoadStringBuffer(serialize_size_data_per_element_));
         memcpy((*data_level0_memory_)[i], buf.get(), size_links_level0_);
         labeltype id;
         memcpy((char *)&id,
@@ -860,14 +860,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       for (size_t i = 0; i < cur_element_count_; i++) {
         label_lookup_[getExternalLabel(i)] = i;
         unsigned int linkListSize;
-        VMSDK_RETURN_IF_ERROR(input.loadUnsigned(linkListSize));
+        VMSDK_RETURN_IF_ERROR(input.LoadUnsigned(linkListSize));
         if (linkListSize == 0) {
           element_levels_[i] = 0;
           *reinterpret_cast<char**>((*linkLists_)[i]) = nullptr;
         } else {
           element_levels_[i] = linkListSize / size_links_per_element_;
           VMSDK_ASSIGN_OR_RETURN(StringBufferUniquePtr buf,
-                                 input.loadStringBuffer(linkListSize));
+                                 input.LoadStringBuffer(linkListSize));
           *reinterpret_cast<char**>((*linkLists_)[i]) = buf.release();
         }
       }
@@ -881,7 +881,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       return absl::OkStatus();
     }
 
-    void loadIndex(const std::string &location, SpaceInterface<dist_t> *s,
+    void LoadIndex(const std::string &location, SpaceInterface<dist_t> *s,
                    size_t max_elements_i = 0) {
       absl::StatusOr<std::unique_ptr<FileInputStream>> input_or =
           FileInputStream::Create(location);
@@ -890,7 +890,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             absl::StrCat("Error instantiating FileInputStream ",
                          input_or.status().message()));
       }
-      absl::Status status = loadIndex(*input_or.value(), s, max_elements_i);
+      absl::Status status = LoadIndex(*input_or.value(), s, max_elements_i);
       if (!status.ok()) {
         throw std::runtime_error(
             absl::StrCat("Error loading index ", status.message()));

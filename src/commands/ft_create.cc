@@ -17,7 +17,7 @@
 #include "src/commands/ft_create_parser.h"
 #include "src/index_schema.pb.h"
 #include "src/schema_manager.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 
 namespace valkey_search {

@@ -47,7 +47,7 @@ class BruteforceSearch : public AlgorithmInterface<dist_t> {
 
     BruteforceSearch(SpaceInterface<dist_t> *s, const std::string &location)
         : cur_element_count_(0), dist_func_param_(nullptr) {
-        loadIndex(location, s);
+        LoadIndex(location, s);
     }
 
 
@@ -145,7 +145,7 @@ class BruteforceSearch : public AlgorithmInterface<dist_t> {
     }
 
 
-    void saveIndex(const std::string &location) {
+    void SaveIndex(const std::string &location) {
       absl::StatusOr<std::unique_ptr<FileOutputStream>> output_or =
           FileOutputStream::Create(location);
       if (!output_or.ok()) {
@@ -153,19 +153,19 @@ class BruteforceSearch : public AlgorithmInterface<dist_t> {
             absl::StrCat("Error instantiating FileOutputStream ",
                          output_or.status().message()));
       }
-      absl::Status status = saveIndex(*output_or.value());
+      absl::Status status = SaveIndex(*output_or.value());
       if (!status.ok()) {
         throw std::runtime_error(
             absl::StrCat("Error saving index ", status.message()));
       }
     }
 
-    absl::Status saveIndex(OutputStream &output) {
-      VMSDK_RETURN_IF_ERROR(output.saveUnsigned(ENCODING_VERSION));
-      VMSDK_RETURN_IF_ERROR(output.saveSizeT(data_->getCapacity()));
+    absl::Status SaveIndex(OutputStream &output) {
+      VMSDK_RETURN_IF_ERROR(output.SaveUnsigned(ENCODING_VERSION));
+      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(data_->getCapacity()));
       const size_t size_per_element = vector_size_ + sizeof(labeltype);
-      VMSDK_RETURN_IF_ERROR(output.saveSizeT(size_per_element));
-      VMSDK_RETURN_IF_ERROR(output.saveSizeT(cur_element_count_));
+      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(size_per_element));
+      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(cur_element_count_));
 
       // TODO: write in chunks to improve throughput
       char buf[size_per_element];
@@ -173,12 +173,12 @@ class BruteforceSearch : public AlgorithmInterface<dist_t> {
         memcpy(buf, *(char **)(*data_)[i], vector_size_);
         memcpy(buf + vector_size_, (*data_)[i] + sizeof(char*),
                sizeof(labeltype));
-         VMSDK_RETURN_IF_ERROR(output.saveStringBuffer(buf, size_per_element));
+         VMSDK_RETURN_IF_ERROR(output.SaveStringBuffer(buf, size_per_element));
       }
       return absl::OkStatus();
     }
 
-    void loadIndex(const std::string &location, SpaceInterface<dist_t> *s) {
+    void LoadIndex(const std::string &location, SpaceInterface<dist_t> *s) {
       absl::StatusOr<std::unique_ptr<FileInputStream>> input_or =
           FileInputStream::Create(location);
       if (!input_or.ok()) {
@@ -186,21 +186,21 @@ class BruteforceSearch : public AlgorithmInterface<dist_t> {
             absl::StrCat("Error instantiating FileInputStream ",
                          input_or.status().message()));
       }
-      absl::Status status = loadIndex(*input_or.value(), s);
+      absl::Status status = LoadIndex(*input_or.value(), s);
       if (!status.ok()) {
         throw std::runtime_error(
             absl::StrCat("Error loading index ", status.message()));
       }
     }
 
-    absl::Status loadIndex(InputStream &input, SpaceInterface<dist_t> *s,
+    absl::Status LoadIndex(InputStream &input, SpaceInterface<dist_t> *s,
                            VectorTracker* vector_tracker) {
       if (data_ != nullptr) {
         data_->clear();
       }
 
       unsigned int encoding_version;
-      VMSDK_RETURN_IF_ERROR(input.loadUnsigned(encoding_version));
+      VMSDK_RETURN_IF_ERROR(input.LoadUnsigned(encoding_version));
       if (encoding_version != ENCODING_VERSION) {
         return absl::InvalidArgumentError(
             absl::StrCat("Unsupported Bruteforce index encoding version ",
@@ -209,9 +209,9 @@ class BruteforceSearch : public AlgorithmInterface<dist_t> {
 
       size_t maxelements, size_per_element;
 
-      VMSDK_RETURN_IF_ERROR(input.loadSizeT(maxelements));
-      VMSDK_RETURN_IF_ERROR(input.loadSizeT(size_per_element));
-      VMSDK_RETURN_IF_ERROR(input.loadSizeT(cur_element_count_));
+      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(maxelements));
+      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(size_per_element));
+      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(cur_element_count_));
 
       vector_size_ = s->get_data_size();
       fstdistfunc_ = s->get_dist_func();
@@ -229,7 +229,7 @@ class BruteforceSearch : public AlgorithmInterface<dist_t> {
 
       for (int i = 0; i < cur_element_count_; i++) {
          VMSDK_ASSIGN_OR_RETURN(StringBufferUniquePtr buf,
-                               input.loadStringBuffer(size_per_element));
+                               input.LoadStringBuffer(size_per_element));
         labeltype id;
         memcpy((char *)&id,
           buf.get() + vector_size_, sizeof(labeltype));

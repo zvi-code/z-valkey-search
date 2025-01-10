@@ -48,7 +48,7 @@
 #include "src/utils/intrusive_ref_count.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 
@@ -127,7 +127,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   virtual size_t GetCapacity() const = 0;
   bool GetNormalize() const { return normalize_; }
   std::unique_ptr<data_model::Index> ToProto() const override;
-  virtual absl::Status SaveIndex(RDBOutputStream& rdb_stream) const override
+  absl::Status SaveIndex(RDBOutputStream& rdb_stream) const override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   void ForEachTrackedKey(
       absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {
@@ -163,7 +163,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
         dimensions_(dimensions),
         attribute_identifier_(attribute_identifier),
         attribute_data_type_(attribute_data_type),
-        vector_allocator_(CreateUniquePtr(
+        vector_allocator_(CREATE_UNIQUE_PTR(
             FixedSizeAllocator, dimensions * sizeof(float) + 1, true)) {}
 
   bool IsValidSizeVector(absl::string_view record) {
@@ -175,17 +175,18 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   template <typename T>
   void Init(int dimensions, data_model::DistanceMetric distance_metric,
             std::unique_ptr<hnswlib::SpaceInterface<T>>& space);
-  virtual absl::Status _AddRecord(uint64_t internal_id,
-                                  absl::string_view record) = 0;
+  virtual absl::Status AddRecordImpl(uint64_t internal_id,
+                                     absl::string_view record) = 0;
 
-  virtual absl::Status _RemoveRecord(uint64_t internal_id) = 0;
-  virtual absl::StatusOr<bool> _ModifyRecord(uint64_t internal_id,
-                                             absl::string_view record) = 0;
-  virtual int _RespondWithInfo(RedisModuleCtx* ctx) const = 0;
+  virtual absl::Status RemoveRecordImpl(uint64_t internal_id) = 0;
+  virtual absl::StatusOr<bool> ModifyRecordImpl(uint64_t internal_id,
+                                                absl::string_view record) = 0;
+  virtual int RespondWithInfoImpl(RedisModuleCtx* ctx) const = 0;
 
   virtual size_t GetDataTypeSize() const = 0;
-  virtual void _ToProto(data_model::VectorIndex* vector_index_proto) const = 0;
-  virtual absl::Status _SaveIndex(RDBOutputStream& rdb_stream) const = 0;
+  virtual void ToProtoImpl(
+      data_model::VectorIndex* vector_index_proto) const = 0;
+  virtual absl::Status SaveIndexImpl(RDBOutputStream& rdb_stream) const = 0;
   void ExternalizeVector(RedisModuleCtx* ctx,
                          const AttributeDataType* attribute_data_type,
                          absl::string_view key_cstr,
@@ -200,7 +201,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   absl::Status LoadKeysAndInternalIds(
       RedisModuleCtx* ctx, const AttributeDataType* attribute_data_type,
       RDBInputStream& rdb_stream);
-  virtual char* _GetValue(uint64_t internal_id) const = 0;
+  virtual char* GetValueImpl(uint64_t internal_id) const = 0;
 
   int dimensions_;
   std::string attribute_identifier_;
@@ -208,8 +209,8 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   data_model::AttributeDataType attribute_data_type_;
   data_model::DistanceMetric distance_metric_;
   virtual absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-  _ComputeDistanceFromRecord(uint64_t internal_id,
-                             absl::string_view query) const = 0;
+  ComputeDistanceFromRecordImpl(uint64_t internal_id,
+                                absl::string_view query) const = 0;
   virtual char* TrackVector(uint64_t internal_id,
                             const InternedStringPtr& vector) = 0;
   virtual void UnTrackVector(uint64_t internal_id) = 0;

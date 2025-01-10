@@ -28,7 +28,7 @@ namespace valkey_search::utils {
 
 class SegmentTree {
  private:
-  typedef struct SegmentTreeNode {
+  struct SegmentTreeNode {
     uint64_t count;
     uint32_t height;
     double min_value;
@@ -45,10 +45,10 @@ class SegmentTree {
           max_value(max_value),
           left_node(std::move(left_node)),
           right_node(std::move(right_node)) {}
-  } SegmentTreeNode;
+  };
 
  public:
-  SegmentTree() { root_ = nullptr; }
+  SegmentTree() = default;
   void Add(double value) { Add(value, root_); }
   bool Remove(double value) { return Remove(value, root_); }
   uint64_t CountGreaterThan(double value, bool inclusive) {
@@ -68,7 +68,7 @@ class SegmentTree {
 
   // Testing only
   void GetTreeString(const std::unique_ptr<SegmentTreeNode>& node,
-                 std::stringstream& ss) {
+                     std::stringstream& ss) {
     if (node == nullptr) {
       return;
     }
@@ -90,7 +90,7 @@ class SegmentTree {
   }
 
   static uint64_t CountGreaterThan(double value, bool inclusive,
-                                  SegmentTreeNode* node) {
+                                   SegmentTreeNode* node) {
     if (node == nullptr) {
       return 0;
     }

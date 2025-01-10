@@ -26,12 +26,15 @@
 #include "absl/log/check.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
+#include "src/utils/lru.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/utils.h"
 
 namespace valkey_search {
+VectorExternalizer::VectorExternalizer()
+    : lru_cache_(std::make_unique<LRU<LRUCacheEntry>>(kLRUCapacity)) {}
 
 std::vector<char> DenormalizeVector(absl::string_view record, size_t type_size,
                                     float magnitude) {

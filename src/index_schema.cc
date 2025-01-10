@@ -54,7 +54,7 @@
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_type.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
@@ -253,7 +253,7 @@ IndexSchema::~IndexSchema() {
 
 namespace type_methods {
 
-absl::Status _RDBSave(RedisModuleIO *rdb, void *value) {
+absl::Status RDBSaveImpl(RedisModuleIO *rdb, void *value) {
   if (rdb == nullptr) {
     DCHECK(false);
     return absl::InvalidArgumentError("RDBSave was called with nullptr as rdb");
@@ -273,7 +273,7 @@ absl::Status _RDBSave(RedisModuleIO *rdb, void *value) {
 }
 
 void RDBSave(RedisModuleIO *rdb, void *value) {
-  absl::Status status = _RDBSave(rdb, value);
+  absl::Status status = RDBSaveImpl(rdb, value);
   if (!status.ok()) {
     Metrics::GetStats().rdb_save_failure_cnt++;
     VMSDK_IO_LOG_EVERY_N_SEC(WARNING, rdb, 0.1)
@@ -604,7 +604,7 @@ void IndexSchema::ScheduleMutation(bool from_backfill,
 }
 
 inline bool ShouldBlockClient([[maybe_unused]] bool inside_multi_exec,
-                        [[maybe_unused]] bool from_backfill) {
+                              [[maybe_unused]] bool from_backfill) {
 #ifdef BLOCK_CLIENT_ON_MUTATION
   return !inside_multi_exec && !from_backfill;
 #else
@@ -827,11 +827,11 @@ absl::Status IndexSchema::RDBSave(RDBOutputStream &rdb_stream) const {
   auto index_schema_proto = ToProto();
   auto index_schema_proto_str = index_schema_proto->SerializeAsString();
   auto index_schema_name = index_schema_proto->name().data();
-  VMSDK_RETURN_IF_ERROR(rdb_stream.saveStringBuffer(
+  VMSDK_RETURN_IF_ERROR(rdb_stream.SaveStringBuffer(
       index_schema_proto_str.data(), index_schema_proto_str.size()))
       << "IO error while saving IndexSchema name: " << index_schema_name
       << " to RDB";
-  VMSDK_RETURN_IF_ERROR(rdb_stream.saveUnsigned(GetAttributeCount()))
+  VMSDK_RETURN_IF_ERROR(rdb_stream.SaveUnsigned(GetAttributeCount()))
       << "IO error while saving attribute count for IndexSchema (name: "
       << index_schema_name << " to RDB";
 
@@ -844,7 +844,7 @@ absl::Status IndexSchema::RDBSave(RDBOutputStream &rdb_stream) const {
     auto attribute_proto = attribute.second.ToProto();
     auto attribute_str = attribute_proto->SerializeAsString();
     VMSDK_RETURN_IF_ERROR(
-        rdb_stream.saveStringBuffer(attribute_str.data(), attribute_str.size()))
+        rdb_stream.SaveStringBuffer(attribute_str.data(), attribute_str.size()))
         << "IO error while saving attribute metadata index name: "
         << index_schema_name << " attribute: " << attribute_alias << " to RDB";
     VMSDK_RETURN_IF_ERROR(attribute.second.GetIndex()->SaveIndex(rdb_stream))
@@ -863,7 +863,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
     return absl::InvalidArgumentError("Unsupported encoding version.");
   }
   VMSDK_ASSIGN_OR_RETURN(
-      auto serialized_index_schema, rdb_stream.loadString(),
+      auto serialized_index_schema, rdb_stream.LoadString(),
       _ << "IO error while reading serialized IndexSchema from RDB");
   auto index_schema_proto = std::make_unique<data_model::IndexSchema>();
   if (!index_schema_proto->ParseFromString(
@@ -900,12 +900,12 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
 
   if (load_index_contents) {
     unsigned int attributes_count;
-    VMSDK_RETURN_IF_ERROR(rdb_stream.loadUnsigned(attributes_count))
+    VMSDK_RETURN_IF_ERROR(rdb_stream.LoadUnsigned(attributes_count))
         << "IO error while reading attributes count from RDB";
 
     for (size_t i = 0; i < attributes_count; ++i) {
       VMSDK_ASSIGN_OR_RETURN(
-          auto serialized_attribute, rdb_stream.loadString(),
+          auto serialized_attribute, rdb_stream.LoadString(),
           _ << "IO error while reading attribute metadata from RDB");
       auto attribute = std::make_unique<data_model::Attribute>();
       if (!attribute->ParseFromString(

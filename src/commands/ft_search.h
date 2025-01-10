@@ -24,7 +24,7 @@
 #include "src/index_schema.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/search.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 class ValkeySearch;

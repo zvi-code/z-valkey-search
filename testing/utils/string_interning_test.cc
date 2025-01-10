@@ -50,7 +50,7 @@ TEST_F(StringInterningTest, BasicTest) {
 
 TEST_P(StringInterningTest, WithAllocator) {
   bool require_ptr_alignment = GetParam();
-  auto allocator = CreateUniquePtr(
+  auto allocator = CREATE_UNIQUE_PTR(
       FixedSizeAllocator, strlen("prefix_key1") + 1, require_ptr_alignment);
   {
     EXPECT_EQ(StringInternStore::Instance().Size(), 0);

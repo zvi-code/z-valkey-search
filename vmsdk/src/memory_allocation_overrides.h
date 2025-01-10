@@ -31,8 +31,6 @@ void* (*__real_aligned_alloc)(size_t, size_t) = aligned_alloc;
 int (*__real_posix_memalign)(void**, size_t, size_t) = posix_memalign;
 void* (*__real_valloc)(size_t) = valloc;
 
-// Our allocator doesn't support tracking system memory size, so we just
-// return 0.
 __attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept;
 }  // extern "C"
 
@@ -44,7 +42,7 @@ void* __wrap_calloc(size_t __nmemb, size_t size) noexcept;
 void* __wrap_realloc(void* ptr, size_t size) noexcept;
 void* __wrap_aligned_alloc(size_t __alignment, size_t __size) noexcept;
 int __wrap_malloc_usable_size(void* ptr) noexcept;
-int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size) noexcept;
+int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size);
 void* __wrap_valloc(size_t size) noexcept;
 }  // extern "C"
 

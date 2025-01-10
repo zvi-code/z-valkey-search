@@ -42,7 +42,7 @@
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
@@ -55,7 +55,7 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
   InlineVectorFilter(query::Predicate *filter_predicate,
                      indexes::VectorBase *vector_index)
       : filter_predicate_(filter_predicate), vector_index_(vector_index) {}
-  ~InlineVectorFilter() = default;
+  ~InlineVectorFilter() override = default;
 
   bool operator()(hnswlib::labeltype id) override {
     auto key = vector_index_->GetKeyDuringSearch(id);

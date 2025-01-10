@@ -27,18 +27,17 @@
 #include "absl/base/no_destructor.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
-#include "absl/status/statusor.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/server.h"
 #include "src/index_schema.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
 
 namespace valkey_search {
 
 namespace server_events {
-  extern void SubscribeToServerEvents();
+extern void SubscribeToServerEvents();
 }
 
 class ValkeySearch {
@@ -112,8 +111,6 @@ class ValkeySearch {
   absl::Status LoadOptions(RedisModuleCtx *ctx, RedisModuleString **argv,
                            int argc);
   static void *RDBLoad(RedisModuleIO *rdb, int encoding_version);
-  static absl::StatusOr<void *> _RDBLoad(RedisModuleIO *rdb,
-                                         int encoding_version);
   static void FreeIndexSchema(void *value);
   static bool IsChildProcess();
   void ProcessIndexSchemaBackfill(RedisModuleCtx *ctx, uint32_t batch_size);

@@ -17,7 +17,7 @@
 #include "src/utils/intrusive_ref_count.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/type_conversions.h"
 
@@ -27,8 +27,8 @@ namespace {
 class VectorExternalizerTest : public ValkeySearchTestWithParam<bool> {
  public:
   VectorExternalizerTest()
-      : allocator(CreateUniquePtr(FixedSizeAllocator,
-                                   100 * sizeof(float) + 1, true)) {}
+      : allocator(CREATE_UNIQUE_PTR(FixedSizeAllocator, 100 * sizeof(float) + 1,
+                                    true)) {}
   void SetUp() override {
     ValkeySearchTestWithParam<bool>::SetUp();
     vectors = DeterministicallyGenerateVectors(kLRUCapacity + 20, 100, 10.0);
@@ -45,8 +45,7 @@ void ExternalizeVectors(const std::vector<std::vector<float>> &vectors,
                         bool expect_externalize_success = true) {
   auto &vector_externalizer = VectorExternalizer::Instance();
   for (size_t i = externalize_offset; i < vectors.size(); ++i) {
-    auto interned_key =
-        StringInternStore::Intern(absl::StrCat("key-", i));
+    auto interned_key = StringInternStore::Intern(absl::StrCat("key-", i));
     absl::string_view vector = VectorToStr(vectors[i]);
     if (normalize) {
       float magnitude;
@@ -95,15 +94,13 @@ TEST_P(VectorExternalizerTest, SimpleExternalize) {
             keys[res] = vmsdk::ToStringView(key);
             return res;
           });
-  absl::flat_hash_map<std::string,
-                      std::pair<RedisModuleHashExternCB, void *>>
+  absl::flat_hash_map<std::string, std::pair<RedisModuleHashExternCB, void *>>
       registration;
   EXPECT_CALL(*kMockRedisModule,
               HashExternalize(testing::_, testing::_, testing::_, testing::_))
       .Times(vectors.size())
       .WillRepeatedly([&](RedisModuleKey *key, RedisModuleString *field,
-                          RedisModuleHashExternCB fn,
-                          void *privdata) {
+                          RedisModuleHashExternCB fn, void *privdata) {
         registration.insert({keys[key], std::make_pair(fn, privdata)});
         auto field_str = vmsdk::ToStringView(field);
         EXPECT_EQ(field_str, "attribute_identifier_1");
@@ -159,15 +156,13 @@ TEST_P(VectorExternalizerTest, PreferNotNormalized) {
             keys[res] = vmsdk::ToStringView(key);
             return res;
           });
-  absl::flat_hash_map<std::string,
-                      std::pair<RedisModuleHashExternCB, void *>>
+  absl::flat_hash_map<std::string, std::pair<RedisModuleHashExternCB, void *>>
       registration;
   EXPECT_CALL(*kMockRedisModule,
               HashExternalize(testing::_, testing::_, testing::_, testing::_))
       .Times(vectors.size())
       .WillRepeatedly([&](RedisModuleKey *key, RedisModuleString *field,
-                          RedisModuleHashExternCB fn,
-                          void *privdata) {
+                          RedisModuleHashExternCB fn, void *privdata) {
         registration.insert({keys[key], std::make_pair(fn, privdata)});
         auto field_str = vmsdk::ToStringView(field);
         EXPECT_EQ(field_str, "attribute_identifier_1");
@@ -197,8 +192,7 @@ TEST_P(VectorExternalizerTest, PreferNotNormalized) {
 
 void VerifyCB(
     const std::vector<std::vector<float>> &vectors, size_t offset,
-    absl::flat_hash_map<std::string,
-                        std::pair<RedisModuleHashExternCB, void *>>
+    absl::flat_hash_map<std::string, std::pair<RedisModuleHashExternCB, void *>>
         &registration,
     bool normalized, size_t expected_lru_promote_cnt) {
   VectorExternalizer::Instance().ProcessEngineUpdateQueue();
@@ -245,15 +239,13 @@ TEST_P(VectorExternalizerTest, LRUTest) {
             keys[res] = vmsdk::ToStringView(key);
             return res;
           });
-  absl::flat_hash_map<std::string,
-                      std::pair<RedisModuleHashExternCB, void *>>
+  absl::flat_hash_map<std::string, std::pair<RedisModuleHashExternCB, void *>>
       registration;
   EXPECT_CALL(*kMockRedisModule,
               HashExternalize(testing::_, testing::_, testing::_, testing::_))
       .Times(vectors.size())
       .WillRepeatedly([&](RedisModuleKey *key, RedisModuleString *field,
-                          RedisModuleHashExternCB fn,
-                          void *privdata) {
+                          RedisModuleHashExternCB fn, void *privdata) {
         auto field_str = vmsdk::ToStringView(field);
         EXPECT_EQ(field_str, "attribute_identifier_1");
         EXPECT_EQ(fn, ExternalizeCB);

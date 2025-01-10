@@ -111,8 +111,7 @@ class OStringStream final : public std::ostream {
 //   the builder is converted to a status.
 class ABSL_MUST_USE_RESULT StatusBuilder {
  public:
-  explicit StatusBuilder();
-  ~StatusBuilder() {}
+  StatusBuilder() = default;
 
   // Creates a `StatusBuilder` based on an original status.  If logging is
   // enabled, it will use `location` as the location from which the log message
@@ -395,8 +394,7 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
   struct Rep {
     explicit Rep(const absl::Status& s);
     explicit Rep(absl::Status&& s);
-    Rep(const Rep& r);
-    ~Rep();
+    explicit Rep(const Rep& r);
 
     // The status that the result will be based on.  Can be modified by
     // util::AttachPayload().

@@ -3,7 +3,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "testing/common.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
@@ -17,8 +17,8 @@ class MockPthreadAtfork {
 };
 MockPthreadAtfork mock_pthread_atfork;
 
-int pthread_atfork(void (*__prepare)(), void (*__parent)(), void (*__child)()) {
-  return mock_pthread_atfork.pthread_atfork(__prepare, __parent, __child);
+int pthread_atfork(void (*prepare)(), void (*parent)(), void (*child)()) {
+  return mock_pthread_atfork.pthread_atfork(prepare, parent, child);
 }
 #endif  // BAZEL_BUILD
 

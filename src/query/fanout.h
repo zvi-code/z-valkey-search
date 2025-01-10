@@ -25,7 +25,7 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/index_schema.h"
 #include "src/query/search.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/thread_pool.h"
 
 namespace valkey_search::query::fanout {

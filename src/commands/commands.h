@@ -1,18 +1,17 @@
 #ifndef VALKEYSEARCH_SRC_COMMANDS_COMMANDS_H_
 #define VALKEYSEARCH_SRC_COMMANDS_COMMANDS_H_
 
-#include <string>
-
+#include "absl/strings/string_view.h"
 #include "absl/status/status.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
-constexpr std::string kCreateCommand{"FT.CREATE"};
-constexpr std::string kDropIndexCommand{"FT.DROPINDEX"};
-constexpr std::string kInfoCommand{"FT.INFO"};
-constexpr std::string kListCommand{"FT._LIST"};
-constexpr std::string kSearchCommand{"FT.SEARCH"};
+constexpr absl::string_view kCreateCommand{"FT.CREATE"};
+constexpr absl::string_view kDropIndexCommand{"FT.DROPINDEX"};
+constexpr absl::string_view kInfoCommand{"FT.INFO"};
+constexpr absl::string_view kListCommand{"FT._LIST"};
+constexpr absl::string_view kSearchCommand{"FT.SEARCH"};
 
 absl::Status FTCreateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
                          int argc);

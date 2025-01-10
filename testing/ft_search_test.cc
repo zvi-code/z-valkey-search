@@ -48,7 +48,7 @@
 #include "testing/coordinator/common.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/thread_pool.h"

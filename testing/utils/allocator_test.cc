@@ -33,7 +33,8 @@ TEST_P(AllocatorTest, BasicFixedSizeAllocator) {
   const size_t size = 11;
   auto memory_alignment = GetParam();
 
-  auto allocator = CreateUniquePtr(FixedSizeAllocator, size, memory_alignment);
+  auto allocator =
+      CREATE_UNIQUE_PTR(FixedSizeAllocator, size, memory_alignment);
   EXPECT_EQ(allocator->ActiveAllocations(), 0);
   EXPECT_EQ(allocator->ChunkCount(), 0);
   char *ptr = allocator->Allocate(size);
@@ -50,7 +51,8 @@ TEST_P(AllocatorTest, FixedSizeAllocatorMultipleChunks) {
   const size_t chunks = 3;
   auto memory_alignment = GetParam();
 
-  auto allocator = CreateUniquePtr(FixedSizeAllocator, size, memory_alignment);
+  auto allocator =
+      CREATE_UNIQUE_PTR(FixedSizeAllocator, size, memory_alignment);
   {
     auto entries_fit_in_chunk = EntriesFitInChunk(size, kChunkBufferPages);
     std::vector<char *> buffers;
@@ -73,7 +75,8 @@ TEST_P(AllocatorTest, FixedSizeAllocatorMultipleChunksWithFree) {
   const size_t chunks = 3;
   auto memory_alignment = GetParam();
 
-  auto allocator = CreateUniquePtr(FixedSizeAllocator, size, memory_alignment);
+  auto allocator =
+      CREATE_UNIQUE_PTR(FixedSizeAllocator, size, memory_alignment);
   {
     auto entries_fit_in_chunk = EntriesFitInChunk(size, kChunkBufferPages);
     std::vector<absl::flat_hash_set<char *>> buffers;
@@ -125,7 +128,8 @@ TEST_P(AllocatorTest, FixedSizeAllocatorMultipleChunksWithDeleteChunks) {
   const size_t size = 256;
   const size_t chunks = 4;
   auto memory_alignment = GetParam();
-  auto allocator = CreateUniquePtr(FixedSizeAllocator, size, memory_alignment);
+  auto allocator =
+      CREATE_UNIQUE_PTR(FixedSizeAllocator, size, memory_alignment);
   {
     auto entries_fit_in_chunk = EntriesFitInChunk(size, kChunkBufferPages);
     std::vector<absl::flat_hash_set<char *>> buffers;
@@ -171,7 +175,8 @@ TEST_P(AllocatorTest, FixedSizeAllocatorMultipleChunksWithFreeEntries) {
   auto memory_alignment = GetParam();
   const size_t size = 256;
   const size_t chunks = 4;
-  auto allocator = CreateUniquePtr(FixedSizeAllocator, size, memory_alignment);
+  auto allocator =
+      CREATE_UNIQUE_PTR(FixedSizeAllocator, size, memory_alignment);
   {
     auto entries_fit_in_chunk = EntriesFitInChunk(size, kChunkBufferPages);
     std::vector<absl::flat_hash_set<char *>> buffers;

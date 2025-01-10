@@ -21,7 +21,7 @@
 #include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/type_conversions.h"
 
 namespace valkey_search::indexes {
@@ -30,7 +30,7 @@ namespace valkey_search::indexes {
 // but configurable.
 const int16_t kDefaultMinPrefixLength{2};
 
-static bool is_valid_prefix(absl::string_view str) {
+static bool IsValidPrefix(absl::string_view str) {
   return str.length() < 2 || str[str.length() - 1] != '*' ||
          str[str.length() - 2] != '*';
 }
@@ -76,7 +76,7 @@ absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
 
     // Prefix tag is identified by a trailing '*'.
     if (tag.back() == '*') {
-      if (!is_valid_prefix(tag)) {
+      if (!IsValidPrefix(tag)) {
         return absl::InvalidArgumentError(
             absl::StrCat("Tag string `", tag, "` ends with multiple *."));
       }
@@ -224,7 +224,6 @@ Tag::EntriesFetcherIterator::EntriesFetcherIterator(
       entries_(entries),
       untracked_keys_(untracked_keys),
       negate_(negate) {
-  Next();
 }
 
 bool Tag::EntriesFetcherIterator::Done() const {
@@ -341,8 +340,10 @@ vmsdk::UniqueRedisString Tag::NormalizeStringRecord(
 }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {
-  return std::make_unique<EntriesFetcherIterator>(tree_, entries_,
+  auto itr = std::make_unique<EntriesFetcherIterator>(tree_, entries_,
                                                   untracked_keys_, negate_);
+  itr->Next();
+  return itr;
 }
 
 size_t Tag::EntriesFetcher::Size() const { return size_; }

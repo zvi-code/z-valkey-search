@@ -39,7 +39,7 @@
 #include "src/rdb_io_stream.h"
 #include "src/utils/segment_tree.h"
 #include "src/utils/string_interning.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 
@@ -48,7 +48,8 @@ template <typename T, typename Hasher = absl::Hash<T>,
 class BTreeNumeric {
  public:
   using SetType = absl::flat_hash_set<T, Hasher, Equaler>;
-  using ConstIterator = absl::btree_map<double, SetType>::const_iterator;
+  using ConstIterator =
+      typename absl::btree_map<double, SetType>::const_iterator;
 
   void Add(const T& value, double key) {
     btree_[key].insert(value);
@@ -120,7 +121,7 @@ class Numeric : public IndexBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   using BTreeNumericIndex =
       BTreeNumeric<InternedStringPtr, InternedStringPtrHash,
-                        InternedStringPtrEqual>;
+                   InternedStringPtrEqual>;
   using EntriesRange = std::pair<BTreeNumericIndex::ConstIterator,
                                  BTreeNumericIndex::ConstIterator>;
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
@@ -159,7 +160,7 @@ class Numeric : public IndexBase {
           size_(size),
           additional_entries_range_(additional_entries_range),
           untracked_keys_(untracked_keys) {}
-    virtual size_t Size() const override;
+    size_t Size() const override;
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 
    private:

@@ -52,7 +52,7 @@
 #include "src/valkey_search.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -142,20 +142,20 @@ class MockAttributeDataType : public AttributeDataType {
 
 class FakeRDBIOStream : public RDBInputStream, public RDBOutputStream {
  public:
-  FakeRDBIOStream() {}
+  FakeRDBIOStream() = default;
   FakeRDBIOStream(unsigned char dump_rdb[], size_t len) {
     buffer_.write((const char*)dump_rdb, len);
   }
   ~FakeRDBIOStream() override = default;
-  absl::Status loadSizeT(size_t& val) override { return loadPOD(val); }
-  absl::Status loadUnsigned(unsigned int& val) override { return loadPOD(val); }
-  absl::Status loadSigned(int& val) override { return loadPOD(val); }
-  absl::Status loadDouble(double& val) override { return loadPOD(val); }
+  absl::Status LoadSizeT(size_t& val) override { return LoadPOD(val); }
+  absl::Status LoadUnsigned(unsigned int& val) override { return LoadPOD(val); }
+  absl::Status LoadSigned(int& val) override { return LoadPOD(val); }
+  absl::Status LoadDouble(double& val) override { return LoadPOD(val); }
 
-  absl::StatusOr<hnswlib::StringBufferUniquePtr> loadStringBuffer(
+  absl::StatusOr<hnswlib::StringBufferUniquePtr> LoadStringBuffer(
       const size_t len) override {
     size_t _len;
-    VMSDK_EXPECT_OK(loadPOD(_len));
+    VMSDK_EXPECT_OK(LoadPOD(_len));
     EXPECT_EQ(_len, len);
     auto str = hnswlib::MakeStringBufferUniquePtr(len);
     buffer_.read(str.get(), len);
@@ -163,9 +163,9 @@ class FakeRDBIOStream : public RDBInputStream, public RDBOutputStream {
     return str;
   }
 
-  absl::StatusOr<vmsdk::UniqueRedisString> loadString() override {
+  absl::StatusOr<vmsdk::UniqueRedisString> LoadString() override {
     size_t len;
-    VMSDK_EXPECT_OK(loadPOD(len));
+    VMSDK_EXPECT_OK(LoadPOD(len));
     auto _str = std::make_unique<char[]>(len);
     buffer_.read(_str.get(), len);
     EXPECT_TRUE(buffer_);
@@ -174,13 +174,13 @@ class FakeRDBIOStream : public RDBInputStream, public RDBOutputStream {
     return str;
   }
 
-  absl::Status saveSizeT(size_t val) override { return savePOD(val); }
-  absl::Status saveUnsigned(unsigned int val) override { return savePOD(val); }
-  absl::Status saveSigned(int val) override { return savePOD(val); }
-  absl::Status saveDouble(double val) override { return savePOD(val); }
+  absl::Status SaveSizeT(size_t val) override { return SavePOD(val); }
+  absl::Status SaveUnsigned(unsigned int val) override { return SavePOD(val); }
+  absl::Status SaveSigned(int val) override { return SavePOD(val); }
+  absl::Status SaveDouble(double val) override { return SavePOD(val); }
 
-  absl::Status saveStringBuffer(const char* str, size_t len) override {
-    VMSDK_EXPECT_OK(savePOD(len));
+  absl::Status SaveStringBuffer(const char* str, size_t len) override {
+    VMSDK_EXPECT_OK(SavePOD(len));
     buffer_.write(str, len);
     EXPECT_TRUE(buffer_);
     return absl::OkStatus();
@@ -188,14 +188,14 @@ class FakeRDBIOStream : public RDBInputStream, public RDBOutputStream {
 
  private:
   template <typename T>
-  absl::Status loadPOD(T& val) {
+  absl::Status LoadPOD(T& val) {
     buffer_.read((char*)&val, sizeof(T));
     EXPECT_TRUE(buffer_);
     return absl::OkStatus();
   }
 
   template <typename T>
-  absl::Status savePOD(const T val) {
+  absl::Status SavePOD(const T val) {
     buffer_.write((char*)&val, sizeof(T));
     EXPECT_TRUE(buffer_);
     return absl::OkStatus();
@@ -223,6 +223,7 @@ class MockIndexSchema : public IndexSchema {
     index_schema_proto.set_name(std::string(key));
     index_schema_proto.mutable_subscribed_key_prefixes()->Add(
         subscribed_key_prefixes.begin(), subscribed_key_prefixes.end());
+    // NOLINTNEXTLINE
     auto res = std::shared_ptr<MockIndexSchema>(new MockIndexSchema(
         ctx, index_schema_proto, std::move(attribute_data_type), module_type,
         mutations_thread_pool));
@@ -338,7 +339,7 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateVectorHNSWSchema(
 // creatable for testing purposes.
 class TestableKeyspaceEventManager : public KeyspaceEventManager {
  public:
-  TestableKeyspaceEventManager() : KeyspaceEventManager() {}
+  TestableKeyspaceEventManager() = default;
 };
 
 class MockThreadPool : public vmsdk::ThreadPool {

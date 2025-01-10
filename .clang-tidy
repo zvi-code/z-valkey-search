@@ -2,6 +2,7 @@ Checks: >
   -clang-analyzer-core.NonNullParamChecker,
   -clang-analyzer-optin.cplusplus.UninitializedObject,
   -clang-diagnostic-builtin-macro-redefined,
+  -clang-analyzer-core.uninitialized.Assign,
   abseil-duration-*,
   abseil-faster-strsplit-delimiter,
   abseil-no-namespace,
@@ -88,9 +89,9 @@ CheckOptions:
     (^FRIEND_TEST$)
 
 
-HeaderFilterRegex: '^./src/.*|^./testing/.*'
+HeaderFilterRegex: '^./(src|testing)\/.*\.(cc|h)$|^./vmsdk/src/[a-zA-Z0-9_]+(\.cc|\.h)$|^./vmsdk/testing/.*'
 
-UseColor: true
+UseColor: false
 
 #WarningsAsErrors: '*'
 

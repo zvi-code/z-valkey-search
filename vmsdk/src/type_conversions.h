@@ -26,14 +26,14 @@
 #include <system_error>  // NOLINT(build/c++11)
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "vmsdk/src/redismodule.h"
-#include "absl/log/check.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
 
@@ -50,7 +50,7 @@ inline void VerifyUpperCase(
 
 template <typename T>
 inline absl::StatusOr<T> To(absl::string_view str) {
-	CHECK(false);
+  CHECK(false) << "Unimplemented";
 }
 
 template <>

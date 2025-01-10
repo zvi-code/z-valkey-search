@@ -39,10 +39,10 @@
 #include "src/coordinator/util.h"
 #include "src/rdb_io_stream.h"
 #include "vmsdk/src/log.h"
-#include "vmsdk/src/redismodule.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::coordinator {
 namespace {
@@ -189,7 +189,7 @@ absl::Status MetadataManager::CreateEntry(
   auto insert_result = metadata.mutable_type_namespace_map()->insert(
       {std::string(type_name), GlobalMetadataEntryMap()});
   (*insert_result.first->second.mutable_entries())[id] = new_entry;
-
+  // NOLINTNEXTLINE
   metadata.mutable_version_header()->set_top_level_version(
       metadata.version_header().top_level_version() + 1);
   metadata.mutable_version_header()->set_top_level_fingerprint(
@@ -252,7 +252,9 @@ void MetadataManager::RegisterType(absl::string_view type_name,
                                     .fingerprint_callback =
                                         std::move(fingerprint_callback),
                                     .update_callback = std::move(callback)}});
-  DCHECK(insert_result.second) << "Type already registered: " << type_name;
+  VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 10)
+      << "Type already registered for: " << type_name;
+  DCHECK(insert_result.second);
 }
 
 void MetadataManager::BroadcastMetadata(RedisModuleCtx *ctx) {
@@ -520,7 +522,7 @@ absl::Status MetadataManager::AuxLoad(RedisModuleIO *rdb, int encver,
   }
 
   RDBInputStream rdb_is(rdb);
-  VMSDK_ASSIGN_OR_RETURN(auto serialized_metadata, rdb_is.loadString());
+  VMSDK_ASSIGN_OR_RETURN(auto serialized_metadata, rdb_is.LoadString());
   GlobalMetadata loaded_metadata;
   if (!loaded_metadata.ParseFromString(
           vmsdk::ToStringView(serialized_metadata.get()))) {
@@ -539,11 +541,11 @@ absl::Status MetadataManager::AuxLoad(RedisModuleIO *rdb, int encver,
   return absl::OkStatus();
 }
 
-void MetadataManager_AuxSave(RedisModuleIO *rdb, int when) {
+void MetadataManagerAuxSave(RedisModuleIO *rdb, int when) {
   MetadataManager::Instance().AuxSave(rdb, when);
 }
 
-int MetadataManager_AuxLoad(RedisModuleIO *rdb, int encver, int when) {
+int MetadataManagerAuxLoad(RedisModuleIO *rdb, int encver, int when) {
   auto status = MetadataManager::Instance().AuxLoad(rdb, encver, when);
   if (status.ok()) {
     return REDISMODULE_OK;
@@ -554,7 +556,7 @@ int MetadataManager_AuxLoad(RedisModuleIO *rdb, int encver, int when) {
   return REDISMODULE_ERR;
 }
 
-void MetadataManager_OnClusterMessageCallback(RedisModuleCtx *ctx,
+void MetadataManagerOnClusterMessageCallback(RedisModuleCtx *ctx,
                                               const char *sender_id,
                                               uint8_t type,
                                               const unsigned char *payload,
@@ -569,11 +571,11 @@ mstime_t GetIntervalWithJitter(mstime_t interval, float jitter_ratio) {
   return interval + interval * jitter;
 }
 
-void MetadataManager_SendMetadataBroadcast(RedisModuleCtx *ctx, void *data) {
+void MetadataManagerSendMetadataBroadcast(RedisModuleCtx *ctx, void *data) {
   RedisModule_CreateTimer(ctx,
                           GetIntervalWithJitter(kMetadataBroadcastIntervalMs,
                                                 kMetadataBroadcastJitterRatio),
-                          &MetadataManager_SendMetadataBroadcast, nullptr);
+                          &MetadataManagerSendMetadataBroadcast, nullptr);
   MetadataManager::Instance().BroadcastMetadata(ctx);
 }
 
@@ -591,7 +593,7 @@ void MetadataManager::OnServerCronCallback(
         ctx,
         GetIntervalWithJitter(kMetadataBroadcastIntervalMs,
                               kMetadataBroadcastJitterRatio),
-        &MetadataManager_SendMetadataBroadcast, nullptr);
+        &MetadataManagerSendMetadataBroadcast, nullptr);
   }
 }
 
@@ -650,7 +652,7 @@ void MetadataManager::OnLoadingCallback(RedisModuleCtx *ctx,
 void MetadataManager::RegisterForClusterMessages(RedisModuleCtx *ctx) {
   RedisModule_RegisterClusterMessageReceiver(
       ctx, coordinator::kMetadataBroadcastClusterMessageReceiverId,
-      MetadataManager_OnClusterMessageCallback);
+      MetadataManagerOnClusterMessageCallback);
 }
 
 // This module type is used purely to get aux callbacks.
@@ -673,10 +675,10 @@ absl::Status MetadataManager::RegisterModuleType(RedisModuleCtx *ctx) {
           [](void *value) {
             DCHECK(false) << "Attempt to free MetadataManager object";
           },
-      .aux_load = MetadataManager_AuxLoad,
+      .aux_load = MetadataManagerAuxLoad,
       // We want to save/load the metadata after the RDB.
       .aux_save_triggers = REDISMODULE_AUX_AFTER_RDB,
-      .aux_save2 = MetadataManager_AuxSave,
+      .aux_save2 = MetadataManagerAuxSave,
   };
 
   module_type_ = RedisModule_CreateDataType(

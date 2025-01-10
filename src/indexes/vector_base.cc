@@ -58,7 +58,7 @@
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/redismodule.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 
@@ -177,7 +177,7 @@ absl::StatusOr<bool> VectorBase::AddRecord(const InternedStringPtr &key,
   VMSDK_ASSIGN_OR_RETURN(
       auto internal_id,
       TrackKey(key, magnitude.value_or(kDefaultMagnitude), interned_vector));
-  absl::Status add_result = _AddRecord(internal_id, interned_vector->Str());
+  absl::Status add_result = AddRecordImpl(internal_id, interned_vector->Str());
   if (!add_result.ok()) {
     auto untrack_result = UnTrackKey(key);
     if (!untrack_result.ok()) {
@@ -233,7 +233,7 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
   VMSDK_RETURN_IF_ERROR(UpdateMetadata(
       key, magnitude.value_or(kDefaultMagnitude), interned_vector));
-  auto modify_result = _ModifyRecord(internal_id, interned_vector->Str());
+  auto modify_result = ModifyRecordImpl(internal_id, interned_vector->Str());
   if (!modify_result.ok()) {
     auto untrack_result = UnTrackKey(key);
     if (!untrack_result.ok()) {
@@ -270,7 +270,7 @@ absl::StatusOr<std::vector<char>> VectorBase::GetValue(
     return absl::NotFoundError("Record was not found");
   }
   std::vector<char> result;
-  char *value = _GetValue(it->second.internal_id);
+  char *value = GetValueImpl(it->second.internal_id);
   if (normalize_) {
     if (it->second.magnitude < 0) {
       return absl::InternalError("Magnitude is not initialized");
@@ -296,7 +296,7 @@ absl::StatusOr<bool> VectorBase::RemoveRecord(
   if (!res.has_value()) {
     return false;
   }
-  VMSDK_RETURN_IF_ERROR(_RemoveRecord(res.value()));
+  VMSDK_RETURN_IF_ERROR(RemoveRecordImpl(res.value()));
   return true;
 }
 
@@ -385,21 +385,21 @@ int VectorBase::RespondWithInfo(RedisModuleCtx *ctx) const {
         ctx, std::to_string(key_by_internal_id_.size()).c_str());
   }
   int array_len = 8;
-  array_len += _RespondWithInfo(ctx);
+  array_len += RespondWithInfoImpl(ctx);
   RedisModule_ReplySetArrayLength(ctx, array_len);
 
   return 4;
 }
 
 absl::Status VectorBase::SaveIndex(RDBOutputStream &rdb_stream) const {
-  VMSDK_RETURN_IF_ERROR(_SaveIndex(rdb_stream));
+  VMSDK_RETURN_IF_ERROR(SaveIndexImpl(rdb_stream));
   absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
-  VMSDK_RETURN_IF_ERROR(rdb_stream.saveSizeT(key_by_internal_id_.size()))
+  VMSDK_RETURN_IF_ERROR(rdb_stream.SaveSizeT(key_by_internal_id_.size()))
       << "Error saving key_by_internal_id_ size";
   for (const auto &[id, key] : key_by_internal_id_) {
-    VMSDK_RETURN_IF_ERROR(rdb_stream.saveSizeT(id)) << "Error saving id";
+    VMSDK_RETURN_IF_ERROR(rdb_stream.SaveSizeT(id)) << "Error saving id";
     VMSDK_RETURN_IF_ERROR(
-        rdb_stream.saveStringBuffer(key->Str().data(), key->Str().size()))
+        rdb_stream.SaveStringBuffer(key->Str().data(), key->Str().size()))
         << "Error saving key";
   }
   return absl::OkStatus();
@@ -455,12 +455,12 @@ absl::Status VectorBase::LoadTrackedKeys(
 absl::Status VectorBase::ConsumeKeysAndInternalIdsForBackCompat(
     RDBInputStream &rdb_stream) {
   size_t keys_count;
-  VMSDK_RETURN_IF_ERROR(rdb_stream.loadSizeT(keys_count))
+  VMSDK_RETURN_IF_ERROR(rdb_stream.LoadSizeT(keys_count))
       << "Error loading keys count";
   for (int i = 0; i < keys_count; ++i) {
     size_t id;
-    VMSDK_RETURN_IF_ERROR(rdb_stream.loadSizeT(id)) << "Error loading id";
-    VMSDK_ASSIGN_OR_RETURN(auto key, rdb_stream.loadString(),
+    VMSDK_RETURN_IF_ERROR(rdb_stream.LoadSizeT(id)) << "Error loading id";
+    VMSDK_ASSIGN_OR_RETURN(auto key, rdb_stream.LoadString(),
                            _ << "Error loading key");
   }
   return absl::OkStatus();
@@ -471,12 +471,12 @@ absl::Status VectorBase::LoadKeysAndInternalIds(
     RDBInputStream &rdb_stream) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   size_t keys_count;
-  VMSDK_RETURN_IF_ERROR(rdb_stream.loadSizeT(keys_count))
+  VMSDK_RETURN_IF_ERROR(rdb_stream.LoadSizeT(keys_count))
       << "Error loading keys count";
   for (size_t i = 0; i < keys_count; ++i) {
     size_t id;
-    VMSDK_RETURN_IF_ERROR(rdb_stream.loadSizeT(id)) << "Error loading id";
-    VMSDK_ASSIGN_OR_RETURN(auto key, rdb_stream.loadString(),
+    VMSDK_RETURN_IF_ERROR(rdb_stream.LoadSizeT(id)) << "Error loading id";
+    VMSDK_ASSIGN_OR_RETURN(auto key, rdb_stream.LoadString(),
                            _ << "Error loading key");
     auto interned_key =
         StringInternStore::Intern(vmsdk::ToStringView(key.get()));
@@ -505,7 +505,7 @@ std::unique_ptr<data_model::Index> VectorBase::ToProto() const {
   vector_index->set_distance_metric(distance_metric_);
   vector_index->set_dimension_count(dimensions_);
   vector_index->set_initial_cap(GetCapacity());
-  _ToProto(vector_index.get());
+  ToProtoImpl(vector_index.get());
   vector_index->mutable_tracked_keys()->mutable_tracked_key_metadata()->Reserve(
       tracked_metadata_by_key_.size());
   for (const auto &[key, metadata] : tracked_metadata_by_key_) {
@@ -523,7 +523,7 @@ absl::StatusOr<std::pair<float, hnswlib::labeltype>>
 VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
                                       absl::string_view query) const {
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalIdDuringSearch(key));
-  return _ComputeDistanceFromRecord(internal_id, query);
+  return ComputeDistanceFromRecordImpl(internal_id, query);
 }
 
 void VectorBase::AddPrefilteredKey(

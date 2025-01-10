@@ -39,22 +39,22 @@ class VectorTracker {
 class InputStream {
  public:
   virtual ~InputStream() = default;
-  virtual absl::Status loadSizeT(size_t &val) = 0;
-  virtual absl::Status loadUnsigned(unsigned int &val) = 0;
-  virtual absl::Status loadSigned(int &val) = 0;
-  virtual absl::Status loadDouble(double &val) = 0;
-  virtual absl::StatusOr<StringBufferUniquePtr> loadStringBuffer(
+  virtual absl::Status LoadSizeT(size_t &val) = 0;
+  virtual absl::Status LoadUnsigned(unsigned int &val) = 0;
+  virtual absl::Status LoadSigned(int &val) = 0;
+  virtual absl::Status LoadDouble(double &val) = 0;
+  virtual absl::StatusOr<StringBufferUniquePtr> LoadStringBuffer(
       size_t len) = 0;
 };
 
 class OutputStream {
  public:
   virtual ~OutputStream() = default;
-  virtual absl::Status saveSizeT(size_t val) = 0;
-  virtual absl::Status saveUnsigned(unsigned int val) = 0;
-  virtual absl::Status saveSigned(int val) = 0;
-  virtual absl::Status saveDouble(double val) = 0;
-  virtual absl::Status saveStringBuffer(const char *str, size_t len) = 0;
+  virtual absl::Status SaveSizeT(size_t val) = 0;
+  virtual absl::Status SaveUnsigned(unsigned int val) = 0;
+  virtual absl::Status SaveSigned(int val) = 0;
+  virtual absl::Status SaveDouble(double val) = 0;
+  virtual absl::Status SaveStringBuffer(const char *str, size_t len) = 0;
 };
 
 class FileInputStream : public InputStream {
@@ -70,12 +70,12 @@ class FileInputStream : public InputStream {
       : input_(std::move(input)) {}
   ~FileInputStream() { input_->close(); };
 
-  absl::Status loadSizeT(size_t &val) override { return loadPOD(val); }
-  absl::Status loadUnsigned(unsigned int &val) override { return loadPOD(val); }
-  absl::Status loadSigned(int &val) override { return loadPOD(val); }
-  absl::Status loadDouble(double &val) override { return loadPOD(val); }
+  absl::Status LoadSizeT(size_t &val) override { return LoadPOD(val); }
+  absl::Status LoadUnsigned(unsigned int &val) override { return LoadPOD(val); }
+  absl::Status LoadSigned(int &val) override { return LoadPOD(val); }
+  absl::Status LoadDouble(double &val) override { return LoadPOD(val); }
 
-  absl::StatusOr<StringBufferUniquePtr> loadStringBuffer(
+  absl::StatusOr<StringBufferUniquePtr> LoadStringBuffer(
       size_t len) override {
     auto str = MakeStringBufferUniquePtr(len);
     input_->read(str.get(), len);
@@ -85,7 +85,7 @@ class FileInputStream : public InputStream {
 
  private:
   template <typename T>
-  absl::Status loadPOD(T &podRef) {
+  absl::Status LoadPOD(T &podRef) {
     input_->read((char *)&podRef, sizeof(T));
     if (*input_) return absl::OkStatus();
     return absl::InternalError("Error reading POD from file");
@@ -107,12 +107,12 @@ class FileOutputStream : public OutputStream {
       : output_(std::move(output)) {}
   ~FileOutputStream() { output_->close(); };
 
-  absl::Status saveSizeT(size_t val) override { return savePOD(val); }
-  absl::Status saveUnsigned(unsigned int val) override { return savePOD(val); }
-  absl::Status saveSigned(int val) override { return savePOD(val); }
-  absl::Status saveDouble(double val) override { return savePOD(val); }
+  absl::Status SaveSizeT(size_t val) override { return SavePOD(val); }
+  absl::Status SaveUnsigned(unsigned int val) override { return SavePOD(val); }
+  absl::Status SaveSigned(int val) override { return SavePOD(val); }
+  absl::Status SaveDouble(double val) override { return SavePOD(val); }
 
-  absl::Status saveStringBuffer(const char *str, size_t len) override {
+  absl::Status SaveStringBuffer(const char *str, size_t len) override {
     output_->write(str, len);
     if (*output_) return absl::OkStatus();
     return absl::InternalError("Error writing string buffer to file");
@@ -120,7 +120,7 @@ class FileOutputStream : public OutputStream {
 
  private:
   template <typename T>
-  absl::Status savePOD(const T val) {
+  absl::Status SavePOD(const T val) {
     output_->write((char *)&val, sizeof(T));
     if (*output_) return absl::OkStatus();
     return absl::InternalError("Error writing POD to file");

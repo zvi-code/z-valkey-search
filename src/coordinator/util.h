@@ -12,8 +12,8 @@ inline grpc::Status ToGrpcStatus(const absl::Status& status) {
   if (status.ok()) {
     return grpc::Status::OK;
   }
-  return grpc::Status(static_cast<grpc::StatusCode>(status.code()),
-                      std::string(status.message()));
+  return {static_cast<grpc::StatusCode>(status.code()),
+          std::string(status.message())};
 }
 namespace coordinator {
 // This offset results in 26673 for Redis default port 6379 - which is COORD
