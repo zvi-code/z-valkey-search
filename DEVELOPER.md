@@ -22,10 +22,10 @@ Add /usr/local/bin to your path:
 grep -q 'export PATH=.*:/usr/local/bin' ~/.bashrc || echo 'export PATH=$PATH:/usr/local/bin' >> ~/.bashrc
 source ~/.bashrc
 ```
-### Compilers
+### Toolchain
 
 
-Bazel is configured to download and use Clang 17 as the default compiler.
+Bazel is setup to download and use llvm toolchain automatically.
 
 
 To switch to the host compiler, comment out the `register_toolchains` line 
@@ -33,12 +33,11 @@ in [MODULE.bazel](https://github.com/valkey-io/valkey-search/blob/main/MODULE.ba
 Both GCC and Clang are supported, with GCC set as the default.
 
 
-If your host default compiler is Clang, run the following:
+If you are using Clang, run the following prior to invoking the build:
 
 
 ```bash
 echo "build --config=clang" > .bazelrc_local
-bazel build //src:valkeysearch
 ```
 
 
@@ -122,9 +121,9 @@ you can run the test with `--strategy=TestRunner=local`, e.g.:
 bazel test //testing:ft_search_test --strategy=TestRunner=local --run_under=/some/path/foobar.sh
 ```
 
-## Load
+## Loading
 
-ValkeySearch can be loaded into any version of Valkey. To load the module, execute the following command:
+ValkeySearch is compatible with any version of Valkey and can also be loaded into Redis versions 7.0 and 7.2. To load the module, execute the following command:
 
 ```bash
 /path/to/valkey-server "--loadmodule /path/to/libvalkeysearch.so  --reader-threads 64 --writer-threads 64"
@@ -132,13 +131,40 @@ ValkeySearch can be loaded into any version of Valkey. To load the module, execu
 
 For optimal performance, set the --reader-threads and --writer-threads parameters to match the number of vCPUs available on your machine.
 
-## CI/CD
+## Coding Style/Quality
 
-### Clang-Tidy
+We follow the [Google coding style](https://google.github.io/styleguide/) and use `clang-tidy` and `clang-format` to enforce code quality and ensure adherence to this style guide.
 
-Clang-tidy is a static analysis tool for C++ that helps with automated refactoring and identifying potential issues in the code. It is recommended to run clang-tidy on your local changes before submitting a pull request. To run clang-tidy on your modified files, execute the following script:
+### Installation
 
+To set up the necessary tools on a Debian-based distribution, run:
 
 ```bash
-ci/clang_tidy_modified.sh
+sudo apt update
+sudo apt install clang libc++-18-dev clang-tidy
 ```
+
+### Running Clang-Tidy Locally
+clang-tidy requires knowledge of the project build configuration to function correctly. To achieve this, follow these steps:
+
+1. Generate the build configuration:
+```bash
+bazel run @hedron_compile_commands//:refresh_all
+```
+
+2. Run `clang-tidy` on a specific file: 
+```bash
+clang-tidy -p compile_commands.json src/some_file.cc
+```
+
+
+### Convenience Script
+
+A convenient script has been provided to automate the process of running clang-tidy and clang-format on your local changes. You can execute it with:
+
+```bash
+ci/check_changes.sh --cache
+```
+
+- The --cache flag is optional.
+- Without --cache: The script checks only locally modified or newly added files that are not
