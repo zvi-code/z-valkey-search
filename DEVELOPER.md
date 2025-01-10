@@ -141,7 +141,7 @@ To set up the necessary tools on a Debian-based distribution, run:
 
 ```bash
 sudo apt update
-sudo apt install clang libc++-18-dev clang-tidy
+sudo apt install clang libc++-dev libc++abi-dev clang-tidy
 ```
 
 ### Running Clang-Tidy Locally
