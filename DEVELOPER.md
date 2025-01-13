@@ -22,6 +22,27 @@ Add /usr/local/bin to your path:
 grep -q 'export PATH=.*:/usr/local/bin' ~/.bashrc || echo 'export PATH=$PATH:/usr/local/bin' >> ~/.bashrc
 source ~/.bashrc
 ```
+
+Build requires `gcc/g++` version 11 or higher, and `glibc` to be available on the host. On a Debian-based distribution, run the following commands:
+
+```bash
+sudo apt update
+sudo apt upgrade
+sudo apt install libc6-dev gcc g++
+
+# If your gcc version is below 11, continue with the following:
+# Add PPA to be able to newer gcc/g++ versions
+sudo add-apt-repository ppa:ubuntu-toolchain-r/test
+sudo apt update
+
+# Install gcc-11 and g++-11
+sudo apt install gcc-11 g++-11
+
+# Set gcc-11 and g++-11 as the default compilers
+sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 100
+sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 100
+```
+
 ### Toolchain
 
 
@@ -137,11 +158,25 @@ We follow the [Google coding style](https://google.github.io/styleguide/) and us
 
 ### Installation
 
-To set up the necessary tools on a Debian-based distribution, run:
+To set up the necessary tools on a Debian-based distribution, follow these steps:
+
+
+1. Install the LLVM repository and set it up:
+```bash
+sudo bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)"
+```
+2. Capture the latest supported clang version by running:
 
 ```bash
-sudo apt update
-sudo apt install clang libc++-dev libc++abi-dev clang-tidy
+sudo update-alternatives --config clang
+```
+3. Install clang-tidy and related dependencies for your latest supported version:
+```bash
+sudo apt install clang-<version> clang++-<version>
+sudo update-alternatives --set clang /usr/bin/clang-<version>
+sudo update-alternatives --set clang++ /usr/bin/clang++-<version>
+sudo apt install libc++-<version>-dev libc++abi-<version>-dev clang-tidy-<version>
+sudo update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-<version> 100
 ```
 
 ### Running Clang-Tidy Locally
