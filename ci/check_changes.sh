@@ -3,7 +3,7 @@
 bazel run @hedron_compile_commands//:refresh_all
 
 use_cache=false
-if [[ "$1" == "--cache" ]]; then
+if [[ "$1" == "--cached" ]]; then
   use_cache=true
 fi
 

@@ -198,8 +198,8 @@ clang-tidy -p compile_commands.json src/some_file.cc
 A convenient script has been provided to automate the process of running clang-tidy and clang-format on your local changes. You can execute it with:
 
 ```bash
-ci/check_changes.sh --cache
+ci/check_changes.sh --cached
 ```
 
-- The --cache flag is optional.
-- Without --cache: The script checks only locally modified or newly added files that are not
+- The --cached flag is optional.
+- Without --cached: The script checks the staged files, i.e., the files that have been added to the staging area (via git add) but not yet committed.
