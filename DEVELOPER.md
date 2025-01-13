@@ -201,5 +201,4 @@ A convenient script has been provided to automate the process of running clang-t
 ci/check_changes.sh --cached
 ```
 
-- The --cached flag is optional.
-- Without --cached: The script checks the staged files, i.e., the files that have been added to the staging area (via git add) but not yet committed.
+- `--cached` is an optional parameter which direct the script to check the staged files, i.e., the files that have been added to the staging area (via git add) but not yet committed.
