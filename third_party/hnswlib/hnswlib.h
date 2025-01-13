@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "iostream.h"
 
 #pragma once
@@ -265,10 +266,13 @@ class ChunkedArray {
         if (i >= getCapacity()) return nullptr;
         size_t chunk_index = i / elements_per_chunk_;
         size_t index_in_chunk = i % elements_per_chunk_;
-        return chunks_[chunk_index].get() + element_byte_size_ * index_in_chunk;
+        return chunks_[chunk_index] + element_byte_size_ * index_in_chunk;
     }
 
     void clear() {
+        for (auto chunk : chunks_) {
+            free(chunk);
+        }
         chunks_.clear();
         element_count_ = 0;
     }
@@ -279,21 +283,11 @@ class ChunkedArray {
 
         chunks_.resize(new_chunk_count);
         for (size_t i = chunk_count; i < new_chunk_count; i++) {
-            chunks_[i] = std::make_unique_for_overwrite<char[]>(
-                    elements_per_chunk_ * element_byte_size_);
+            chunks_[i] = new char[elements_per_chunk_ * element_byte_size_];
             // Note that we don't initialize the memory on purpose. The caller
             // is expected to track the initialization state.
         }
-
         element_count_ = new_element_count;
-    }
-
-    std::deque<std::unique_ptr<char[]>>::const_iterator begin_chunk() const {
-        return chunks_.begin();
-    }
-
-    std::deque<std::unique_ptr<char[]>>::const_iterator end_chunk() const {
-        return chunks_.end();
     }
 
  private:
@@ -304,7 +298,7 @@ class ChunkedArray {
     size_t element_byte_size_;
     size_t elements_per_chunk_;
     size_t element_count_;
-    std::deque<std::unique_ptr<char[]>> chunks_;
+    std::deque<char*> chunks_;
 };
 
 }  // namespace hnswlib

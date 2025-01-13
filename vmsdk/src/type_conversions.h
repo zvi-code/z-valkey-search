@@ -102,11 +102,11 @@ inline absl::StatusOr<int> To(absl::string_view str) {
 
 inline absl::string_view ToStringView(const RedisModuleString *str) {
   if (!str) {
-    return absl::string_view();
+    return {};
   }
   size_t length = 0;
   const char *str_ptr = RedisModule_StringPtrLen(str, &length);
-  return absl::string_view(str_ptr, length);
+  return {str_ptr, length};
 }
 
 template <typename T>

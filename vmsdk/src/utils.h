@@ -65,15 +65,15 @@ inline void VerifyMainThread() { CHECK(IsMainThread()); }
 template <typename T>
 class MainThreadAccessGuard {
  public:
-  MainThreadAccessGuard() {}
+  MainThreadAccessGuard() = default;
   MainThreadAccessGuard(const T &var) : var_(var) {}
-  MainThreadAccessGuard(T&& var) : var_(std::move(var)) {}
+  MainThreadAccessGuard(T&& var) noexcept : var_(std::move(var)) {}
   MainThreadAccessGuard &operator=(MainThreadAccessGuard<T> const &other) {
     VerifyMainThread();
     var_ = other.var_;
     return *this;
   }
-  MainThreadAccessGuard &operator=(MainThreadAccessGuard<T> &&other) {
+  MainThreadAccessGuard &operator=(MainThreadAccessGuard<T> &&other) noexcept {
     VerifyMainThread();
     var_ = std::move(other.var_);
     return *this;

@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "hnswlib.h"
 #include "iostream.h"
@@ -168,12 +169,13 @@ class BruteforceSearch : public AlgorithmInterface<dist_t> {
       VMSDK_RETURN_IF_ERROR(output.SaveSizeT(cur_element_count_));
 
       // TODO: write in chunks to improve throughput
-      char buf[size_per_element];
+      std::vector<char> buf(size_per_element);
       for (int i = 0; i < cur_element_count_; i++) {
-        memcpy(buf, *(char **)(*data_)[i], vector_size_);
-        memcpy(buf + vector_size_, (*data_)[i] + sizeof(char*),
+        memcpy(buf.data(), *(char **)(*data_)[i], vector_size_);
+        memcpy(buf.data() + vector_size_, (*data_)[i] + sizeof(char*),
                sizeof(labeltype));
-         VMSDK_RETURN_IF_ERROR(output.SaveStringBuffer(buf, size_per_element));
+         VMSDK_RETURN_IF_ERROR(
+             output.SaveStringBuffer(buf.data(), size_per_element));
       }
       return absl::OkStatus();
     }

@@ -32,10 +32,13 @@ enum class LogLevel : int {
   kVerbose = 2,
   kDebug = 3,
 };
-
+// NOLINTNEXTLINE
 constexpr LogLevel WARNING = static_cast<LogLevel>(LogLevel::kWarning);
+// NOLINTNEXTLINE
 constexpr LogLevel NOTICE = static_cast<LogLevel>(LogLevel::kNotice);
+// NOLINTNEXTLINE
 constexpr LogLevel VERBOSE = static_cast<LogLevel>(LogLevel::kVerbose);
+// NOLINTNEXTLINE
 constexpr LogLevel DEBUG = static_cast<LogLevel>(LogLevel::kDebug);
 
 namespace vmsdk {

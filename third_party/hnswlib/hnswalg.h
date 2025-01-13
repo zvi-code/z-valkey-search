@@ -13,6 +13,7 @@
 #include <random>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 #include "hnswlib.h"
 #include "iostream.h"
@@ -735,16 +736,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       data_level0_memory_->resize(max_elements_);
       linkLists_->resize(max_elements_);
 
-    char buf[serialize_size_data_per_element_];
+      std::vector<char> buf(serialize_size_data_per_element_);
       for (int i = 0; i < cur_element_count_; i++) {
-        memcpy(buf, (*data_level0_memory_)[i], size_links_level0_);
-        memcpy(buf  + size_links_level0_,
+        memcpy(buf.data(), (*data_level0_memory_)[i], size_links_level0_);
+        memcpy(buf.data() + size_links_level0_,
                *(char **)((*data_level0_memory_)[i] + offsetData_),
                  vector_size_);
-        memcpy(buf + size_links_level0_ + vector_size_,
+        memcpy(buf.data() + size_links_level0_ + vector_size_,
                (*data_level0_memory_)[i] + label_offset_, sizeof(labeltype));
         VMSDK_RETURN_IF_ERROR(output.SaveStringBuffer(
-                buf,
+                buf.data(),
                 serialize_size_data_per_element_));
       };
 

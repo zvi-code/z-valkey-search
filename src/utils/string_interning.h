@@ -17,8 +17,6 @@
 #ifndef VALKEYSEARCH_SRC_UTILS_STRING_INTERNING_H_
 #define VALKEYSEARCH_SRC_UTILS_STRING_INTERNING_H_
 
-#include <stdbool.h>
-
 #include <cstddef>
 #include <memory>
 

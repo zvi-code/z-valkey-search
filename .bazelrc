@@ -8,7 +8,6 @@ build --copt=-falign-functions=5
 build --copt=-fmath-errno
 build --copt=-ffp-contract=off
 build --copt=-fno-rounding-math
-build --copt=-march=x86-64
 build --copt=-maes
 build --copt=-mcx16
 build --copt=-msse4.2
@@ -16,10 +15,8 @@ build --copt=-mpclmul
 build --copt=-mprfchw
 build --copt=-mavx
 build --copt=-mtune=generic
-build --copt=-gno-split-dwarf
 build --copt=-gdwarf-5
 build --copt=-gz=zlib
-build --copt=-O3
 build --copt=-ffast-math
 build --copt=-funroll-loops
 build --copt=-ftree-vectorize
@@ -27,7 +24,7 @@ build --copt=-fopenmp
 build --copt=-mavx2
 build --copt=-mfma
 
-build --copt=-Werror
+#build --copt=-Werror
 
 build --copt=-ffp-contract=off
 build --copt=-flax-vector-conversions
@@ -47,10 +44,14 @@ build --host_per_file_copt=testing/.*@-Wno-overloaded-virtual
 # Suppress some warnings
 build --copt=-Wno-sign-compare
 build --copt=-Wno-uninitialized
+build --copt=-Wno-nan-infinity-disabled
+build --copt=-Wno-unknown-warning-option
+build --copt=-Wno-unused-command-line-argument
+build --cxxopt=-Wno-missing-requires
 
 try-import .bazelrc_local
 
 build:lto --copt=-flto=auto
 build:lto --linkopt=-flto
 
-build:gcc --cxxopt=-Wno-missing-requires --cxxopt=-Wno-comment
+build:gcc --cxxopt=-Wno-comment

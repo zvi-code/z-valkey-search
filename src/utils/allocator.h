@@ -17,8 +17,7 @@
 #ifndef VALKEYSEARCH_SRC_UTILS_ALLOCATOR_H_
 #define VALKEYSEARCH_SRC_UTILS_ALLOCATOR_H_
 
-#include <stdbool.h>
-#include <stddef.h>
+#include <cstddef>
 
 #include <memory>
 #include <stack>

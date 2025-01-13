@@ -33,7 +33,9 @@ class LatencySampler {
         sample_unit_(sample_unit),
         reporting_unit_(reporting_unit) {}
   ~LatencySampler() {
-    if (initialized_) hdr_close(histogram_);
+    if (initialized_) {
+      hdr_close(histogram_);
+    }
   }
 
   void SubmitSample(std::unique_ptr<vmsdk::StopWatch> sample) {
@@ -83,7 +85,7 @@ class LatencySampler {
   hdr_histogram *histogram_ ABSL_GUARDED_BY(histogram_lock_);
 };
 
-#define SAMPLE_EVERY_N(interval)          \
+#define SAMPLE_EVERY_N(interval)                   \
   []() -> std::unique_ptr<vmsdk::StopWatch> {      \
     thread_local uint64_t counter = 0;             \
     if (counter++ % interval == 0) {               \

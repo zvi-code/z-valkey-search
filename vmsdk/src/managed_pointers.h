@@ -69,11 +69,11 @@ class BlockedClient {
     blocked_client_ = RedisModule_BlockClient(
         ctx, reply_callback, timeout_callback, free_privdata, timeout_ms);
   }
-  BlockedClient(BlockedClient &&other)
+  BlockedClient(BlockedClient &&other) noexcept
       : blocked_client_(std::exchange(other.blocked_client_, nullptr)),
         private_data_(std::exchange(other.private_data_, nullptr)) {}
 
-  BlockedClient &operator=(BlockedClient &&other) {
+  BlockedClient &operator=(BlockedClient &&other) noexcept {
     if (this != &other) {
       UnblockClient();
       blocked_client_ = std::exchange(other.blocked_client_, nullptr);

@@ -23,60 +23,94 @@
 #include <new>
 
 extern "C" {
+// NOLINTNEXTLINE
 void* (*__real_malloc)(size_t) = malloc;
+// NOLINTNEXTLINE
 void (*__real_free)(void*) = free;
+// NOLINTNEXTLINE
 void* (*__real_calloc)(size_t, size_t) = calloc;
+// NOLINTNEXTLINE
 void* (*__real_realloc)(void*, size_t) = realloc;
+// NOLINTNEXTLINE
 void* (*__real_aligned_alloc)(size_t, size_t) = aligned_alloc;
+// NOLINTNEXTLINE
 int (*__real_posix_memalign)(void**, size_t, size_t) = posix_memalign;
+// NOLINTNEXTLINE
 void* (*__real_valloc)(size_t) = valloc;
-
+// NOLINTNEXTLINE
 __attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept;
 }  // extern "C"
 
 extern "C" {
 // See https://www.gnu.org/software/libc/manual/html_node/Replacing-malloc.html
+// NOLINTNEXTLINE
 void* __wrap_malloc(size_t size) noexcept;
+// NOLINTNEXTLINE
 void __wrap_free(void* ptr) noexcept;
+// NOLINTNEXTLINE
 void* __wrap_calloc(size_t __nmemb, size_t size) noexcept;
+// NOLINTNEXTLINE
 void* __wrap_realloc(void* ptr, size_t size) noexcept;
+// NOLINTNEXTLINE
 void* __wrap_aligned_alloc(size_t __alignment, size_t __size) noexcept;
+// NOLINTNEXTLINE
 int __wrap_malloc_usable_size(void* ptr) noexcept;
+// NOLINTNEXTLINE
 int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size);
+// NOLINTNEXTLINE
 void* __wrap_valloc(size_t size) noexcept;
 }  // extern "C"
 
+// NOLINTNEXTLINE
 #define malloc(...) __wrap_malloc(__VA_ARGS__)
+// NOLINTNEXTLINE
 #define calloc(...) __wrap_calloc(__VA_ARGS__)
+// NOLINTNEXTLINE
 #define realloc(...) __wrap_realloc(__VA_ARGS__)
+// NOLINTNEXTLINE
 #define free(...) __wrap_free(__VA_ARGS__)
+// NOLINTNEXTLINE
 #define aligned_alloc(...) __wrap_aligned_alloc(__VA_ARGS__)
+// NOLINTNEXTLINE
 #define posix_memalign(...) __wrap_posix_memalign(__VA_ARGS__)
+// NOLINTNEXTLINE
 #define valloc(...) __wrap_valloc(__VA_ARGS__)
 
+// NOLINTNEXTLINE
 void* operator new(size_t __sz) noexcept(false);
 void operator delete(void* p) noexcept;
+// NOLINTNEXTLINE
 void operator delete(void* p, size_t __sz) noexcept;
+// NOLINTNEXTLINE
 void* operator new[](size_t __sz) noexcept(false);
 void operator delete[](void* p) noexcept;
+// NOLINTNEXTLINE
 void operator delete[](void* p, size_t __sz) noexcept;
+// NOLINTNEXTLINE
 void* operator new(size_t __sz, const std::nothrow_t& nt) noexcept;
+// NOLINTNEXTLINE
 void* operator new[](size_t __sz, const std::nothrow_t& nt) noexcept;
 void operator delete(void* p, const std::nothrow_t& nt) noexcept;
 void operator delete[](void* p, const std::nothrow_t& nt) noexcept;
+// NOLINTNEXTLINE
 void* operator new(size_t __sz, std::align_val_t alignment) noexcept(false);
+// NOLINTNEXTLINE
 void* operator new(size_t __sz, std::align_val_t alignment,
                    const std::nothrow_t&) noexcept;
 void operator delete(void* p, std::align_val_t alignment) noexcept;
 void operator delete(void* p, std::align_val_t alignment,
                      const std::nothrow_t&) noexcept;
+// NOLINTNEXTLINE
 void operator delete(void* p, size_t __sz, std::align_val_t alignment) noexcept;
+// NOLINTNEXTLINE
 void* operator new[](size_t __sz, std::align_val_t alignment) noexcept(false);
+// NOLINTNEXTLINE
 void* operator new[](size_t __sz, std::align_val_t alignment,
                      const std::nothrow_t&) noexcept;
 void operator delete[](void* p, std::align_val_t alignment) noexcept;
 void operator delete[](void* p, std::align_val_t alignment,
                        const std::nothrow_t&) noexcept;
+// NOLINTNEXTLINE
 void operator delete[](void* p, size_t __sz,
                        std::align_val_t alignment) noexcept;
 

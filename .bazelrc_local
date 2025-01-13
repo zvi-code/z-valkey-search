@@ -1,1 +1,1 @@
-#build --config=gcc
+build --config=gcc
