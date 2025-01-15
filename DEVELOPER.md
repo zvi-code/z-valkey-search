@@ -165,18 +165,14 @@ To set up the necessary tools on a Debian-based distribution, follow these steps
 ```bash
 sudo bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)"
 ```
-2. Capture the latest supported clang version by running:
 
+2. Install clang-tidy and related dependencies for your latest supported version:
 ```bash
-sudo update-alternatives --config clang
-```
-3. Install clang-tidy and related dependencies for your latest supported version:
-```bash
-sudo apt install clang-<version> clang++-<version>
-sudo update-alternatives --set clang /usr/bin/clang-<version>
-sudo update-alternatives --set clang++ /usr/bin/clang++-<version>
-sudo apt install libc++-<version>-dev libc++abi-<version>-dev clang-tidy-<version>
-sudo update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-<version> 100
+sudo apt install clang-16 clang++-16
+sudo update-alternatives --set clang /usr/bin/clang-16
+sudo update-alternatives --set clang++ /usr/bin/clang++-16
+sudo apt install libc++-16-dev libc++abi-16-dev clang-tidy-16
+sudo update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-16 100
 ```
 
 ### Running Clang-Tidy Locally
