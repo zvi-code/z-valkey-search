@@ -28,7 +28,7 @@ Build requires `gcc/g++` version 11 or higher, and `glibc` to be available on th
 ```bash
 sudo apt update
 sudo apt upgrade
-sudo apt install libc6-dev gcc g++
+sudo apt install -y libc6-dev gcc g++
 
 # If your gcc version is below 11, continue with the following:
 # Add PPA to be able to newer gcc/g++ versions
@@ -36,7 +36,7 @@ sudo add-apt-repository ppa:ubuntu-toolchain-r/test
 sudo apt update
 
 # Install gcc-11 and g++-11
-sudo apt install gcc-11 g++-11
+sudo apt install -y gcc-11 g++-11
 
 # Set gcc-11 and g++-11 as the default compilers
 sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 100
@@ -168,7 +168,7 @@ sudo bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)"
 
 2. Install clang-tidy and related dependencies for your latest supported version:
 ```bash
-sudo apt install clang-16 clang++-16
+sudo apt install -y clang-16 clang++-16
 sudo update-alternatives --set clang /usr/bin/clang-16
 sudo update-alternatives --set clang++ /usr/bin/clang++-16
 sudo apt install libc++-16-dev libc++abi-16-dev clang-tidy-16

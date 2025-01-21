@@ -24,8 +24,5 @@ fi
 echo "Running clang-tidy on modified/new files..."
 for file in $files; do
   clang-tidy --quiet  -p compile_commands.json "$file"
-  if ! clang-format -output-replacements-xml "$file" | grep -q "<replacement "; then
-    continue
-  fi
 done
 

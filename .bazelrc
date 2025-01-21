@@ -55,3 +55,7 @@ build:lto --copt=-flto=auto
 build:lto --linkopt=-flto
 
 build:gcc --cxxopt=-Wno-comment
+build:clang --cxxopt=-stdlib=libc++  --cxxopt=-lc++abi
+build:clang --linkopt=-stdlib=libc++
+build --action_env=CC=/usr/bin/clang-17
+build --action_env=CXX=/usr/bin/clang++-17

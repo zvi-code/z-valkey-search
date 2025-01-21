@@ -90,11 +90,7 @@ CheckOptions:
 
 
 HeaderFilterRegex: '^./(src|testing)\/.*\.(cc|h)$|^./vmsdk/src/[a-zA-Z0-9_]+(\.cc|\.h)$|^./vmsdk/testing/.*'
+#HeaderFilterRegex: '.*'
+FormatStyle:     file
 
-#WarningsAsErrors: '*'
-
-## The version here is arbitrary since any change to this file will
-## trigger a full run of clang-tidy against all files.
-## It can be useful as it seems some header changes may not trigger the
-## expected rerun.
-# v0
+WarningsAsErrors: '*'

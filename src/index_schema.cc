@@ -69,19 +69,18 @@
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_type.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
 constexpr int kEncodingVersion = 0;
 
 LogLevel GetLogSeverity(bool ok) { return ok ? DEBUG : WARNING; }
-
 std::string IndexSchema::GetRedisKeyForIndexSchemaName(absl::string_view name) {
   return absl::StrCat(kIndexSchemaKeyPrefix, name);
 }
@@ -385,25 +384,25 @@ absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
 }
 
 void TrackResults(
-    RedisModuleCtx *ctx, const absl::StatusOr<bool> &status_or,
+    RedisModuleCtx *ctx, const absl::StatusOr<bool> &status,
     const char *operation_str,
     IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>> &counter) {
-  if (ABSL_PREDICT_FALSE(!status_or.ok())) {
+  if (ABSL_PREDICT_FALSE(!status.ok())) {
     ++counter.failure_cnt;
-  } else if (status_or.value()) {
+  } else if (status.value()) {
     ++counter.success_cnt;
   } else {
     ++counter.skipped_cnt;
   }
   // Separate errors and successes so that they log on different timers.
-  if (ABSL_PREDICT_TRUE(status_or.ok())) {
-    VMSDK_LOG_EVERY_N_SEC(GetLogSeverity(status_or.ok()), ctx, 5)
+  if (ABSL_PREDICT_TRUE(status.ok())) {
+    VMSDK_LOG_EVERY_N_SEC(GetLogSeverity(status.ok()), ctx, 5)
         << operation_str
-        << " succeeded with result: " << status_or.status().ToString();
+        << " succeeded with result: " << status.status().ToString();
   } else {
-    VMSDK_LOG_EVERY_N_SEC(GetLogSeverity(status_or.ok()), ctx, 1)
+    VMSDK_LOG_EVERY_N_SEC(GetLogSeverity(status.ok()), ctx, 1)
         << operation_str
-        << " failed with result: " << status_or.status().ToString();
+        << " failed with result: " << status.status().ToString();
   }
 }
 
@@ -984,11 +983,13 @@ void IndexSchema::OnLoadingEnded(RedisModuleCtx *ctx) {
     });
     VMSDK_LOG(NOTICE, ctx) << "Deleting " << stale_entries
                            << " stale entries of " << key_size
-                           << " total keys for " << "{Index: " << name_
+                           << " total keys for "
+                           << "{Index: " << name_
                            << ", Attribute: " << attribute.first << "}";
   }
   VMSDK_LOG(NOTICE, ctx) << "Deleting " << deletion_attributes.size()
-                         << " stale entries for " << "{Index: " << name_ << "}";
+                         << " stale entries for "
+                         << "{Index: " << name_ << "}";
 
   for (auto &[key, attributes] : deletion_attributes) {
     auto interned_key = std::make_shared<InternedString>(key);
