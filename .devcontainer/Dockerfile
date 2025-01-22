@@ -1,6 +1,7 @@
 # Use Ubuntu 24.04 as the base image
 FROM ubuntu:noble
 
+RUN apt update && apt-get install -y ca-certificates
 # Set non-interactive mode for APT
 ENV DEBIAN_FRONTEND=noninteractive
 # Install system dependencies
@@ -40,9 +41,10 @@ RUN update-alternatives --install /usr/bin/clang clang /usr/bin/clang-17 100 && 
     update-alternatives --set clang /usr/bin/clang-17
 RUN update-alternatives --install /usr/bin/clang-cpp clang-cpp /usr/bin/clang-cpp-17 100 && \
     update-alternatives --set clang-cpp /usr/bin/clang-cpp-17
-    RUN update-alternatives --install /usr/bin/clangd clangd /usr/bin/clangd-17 100 && \
+RUN update-alternatives --install /usr/bin/clangd clangd /usr/bin/clangd-17 100 && \
     update-alternatives --set clangd /usr/bin/clangd-17
 
+RUN update-ca-certificates
 
 # Install Bazel/Buildifier
 RUN wget -O /usr/local/bin/bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-$([ $(uname -m) = "aarch64" ] && echo "arm64" || echo "amd64") && chmod +x /usr/local/bin/bazel
