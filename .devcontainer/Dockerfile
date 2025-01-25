@@ -56,19 +56,28 @@ ENV PATH="/usr/local/bin:$PATH"
 # Set working directory
 WORKDIR /workspace
 
-# Add non-root user for development
-RUN useradd -m vscode && echo "vscode ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+ARG USERNAME=ubuntu
+ENV USERNAME=${USERNAME}
+ARG USER_UID=1000
+ENV USER_UID=${USER_UID}
+ARG USER_GID=1000
+ENV USER_GID=${USER_GID}
 
-USER vscode
+RUN groupadd -g $USER_GID $USERNAME || true; \
+    useradd -ms /bin/bash -u $USER_UID -g $USER_GID $USERNAME || true; \
+    echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers || true; 
+
+USER $USERNAME
 
 # Add an alias for 'vi' to point to 'vim' if 'vi' doesn't exist
-RUN echo 'if ! command -v vi &> /dev/null; then alias vi="vim"; fi' >> /home/vscode/.bashrc
+RUN echo 'if ! command -v vi &> /dev/null; then alias vi="vim"; fi' >> /home/$USERNAME/.bashrc
 
 ARG ENABLE_COMP_DB_REFRESH=true
 ENV ENABLE_COMP_DB_REFRESH=${ENABLE_COMP_DB_REFRESH}
 
 # Ensure the history file exists and configure permissions
-RUN touch  /home/vscode/.bash_history && chmod 600  /home/vscode/.bash_history
+RUN touch /home/$USERNAME/.bash_history && \
+    chmod 600 /home/$USERNAME/.bash_history
 
 ENV CC=clang
 ENV CXX=clang++
