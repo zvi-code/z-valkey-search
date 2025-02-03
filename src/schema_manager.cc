@@ -279,7 +279,7 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
   // Note that serialization is non-deterministic.
   // https://protobuf.dev/programming-guides/serialization-not-canonical/
   // However, it should be good enough for us assuming the same version of the
-  // module is deployed fleetwide. When different versions are deployed,
+  // module is deployed fleet wide. When different versions are deployed,
   // metadata with the latest encoding version is guaranteed to be prioritized
   // by the metadata manager
   std::string serialized_entry;
