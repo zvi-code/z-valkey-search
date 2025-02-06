@@ -63,9 +63,9 @@ ENV USER_UID=${USER_UID}
 ARG USER_GID=1000
 ENV USER_GID=${USER_GID}
 
-RUN groupadd -g $USER_GID $USERNAME || true; \
-    useradd -ms /bin/bash -u $USER_UID -g $USER_GID $USERNAME || true; \
-    echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers || true; 
+RUN groupadd -g $USER_GID $USERNAME || groupmod -n $USER_UID "$(getent group $USER_GID | cut -d: -f1)" || true; \
+    useradd -ms /bin/bash -u $USER_UID -g $USER_GID $USERNAME || usermod -l $USERNAME -g $USER_GID -d /home/$USERNAME -m "$(getent passwd $USER_UID | cut -d: -f1)" || true ;
+RUN echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers || true;
 
 USER $USERNAME
 

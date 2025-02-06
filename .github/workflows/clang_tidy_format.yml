@@ -50,7 +50,7 @@ jobs:
           echo "Building CompDB"
           docker run --rm \
             -v "$(pwd):/workspace" \
-            --user "$(id -u):$(id -g)" \
+            --user "ubuntu:ubuntu" \
             clang-tidy-format-image \
             bash -c "bazel build //... && bazel run @hedron_compile_commands//:refresh_all"
 
@@ -71,7 +71,7 @@ jobs:
             echo "Running script on $FILE"
             docker run --rm \
               -v "$(pwd):/workspace" \
-              --user "$(id -u):$(id -g)" \
+              --user "ubuntu:ubuntu" \
               clang-tidy-format-image \
               bash -c "clang-tidy --quiet -p compile_commands.json "$FILE" 2>&1 | tail -n +3 && ci/check_clang_format.sh "$FILE""
           done
