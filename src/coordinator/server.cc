@@ -117,10 +117,10 @@ void SerializeNeighbors(SearchIndexPartitionResponse* response,
     neighbor_proto->set_score(neighbor.distance);
     if (neighbor.attribute_contents) {
       const auto& attribute_contents = neighbor.attribute_contents.value();
-      for (const auto& [attr_alias, attr_value] : attribute_contents) {
+      for (const auto& [identifier, record] : attribute_contents) {
         auto contents = neighbor_proto->add_attribute_contents();
-        contents->set_attribute_alias(attr_alias);
-        contents->set_content(vmsdk::ToStringView(attr_value.value.get()));
+        contents->set_identifier(identifier);
+        contents->set_content(vmsdk::ToStringView(record.value.get()));
       }
     }
   }

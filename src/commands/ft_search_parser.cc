@@ -295,8 +295,16 @@ ConstructReturnParser() {
               return absl::InvalidArgumentError("Unexpected parameter `AS` ");
             }
           }
+          auto schema_identifier = parameters.index_schema->GetIdentifier(
+              vmsdk::ToStringView(identifier.get()));
+          vmsdk::UniqueRedisString attribute_alias;
+          if (schema_identifier.ok()) {
+            attribute_alias = vmsdk::RetainUniqueRedisString(identifier.get());
+            identifier = vmsdk::MakeUniqueRedisString(*schema_identifier);
+          }
           parameters.return_attributes.emplace_back(query::ReturnAttribute{
-              std::move(identifier), std::move(as_property)});
+              std::move(identifier), std::move(attribute_alias),
+              std::move(as_property)});
         }
         return absl::OkStatus();
       });

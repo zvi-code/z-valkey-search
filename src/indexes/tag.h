@@ -124,7 +124,7 @@ class Tag : public IndexBase {
           size_(size),
           entries_(entries),
           negate_(negate),
-          untracked_keys_(untracked_keys){};
+          untracked_keys_(untracked_keys) {};
     size_t Size() const override;
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 
@@ -145,8 +145,6 @@ class Tag : public IndexBase {
       absl::string_view data, char separator);
   static absl::flat_hash_set<absl::string_view> ParseRecordTags(
       absl::string_view data, char separator);
-  vmsdk::UniqueRedisString NormalizeStringRecord(
-      vmsdk::UniqueRedisString input) const override;
 
  private:
   mutable absl::Mutex index_mutex_;

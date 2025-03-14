@@ -65,6 +65,7 @@ struct LimitParameter {
 
 struct ReturnAttribute {
   vmsdk::UniqueRedisString identifier;
+  vmsdk::UniqueRedisString attribute_alias;
   vmsdk::UniqueRedisString alias;
 };
 

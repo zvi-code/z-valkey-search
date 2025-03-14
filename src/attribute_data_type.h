@@ -137,5 +137,6 @@ class JsonAttributeDataType : public AttributeDataType {
 };
 
 bool IsJsonModuleLoaded(RedisModuleCtx *ctx);
+absl::string_view TrimBrackets(absl::string_view record);
 }  // namespace valkey_search
 #endif  // VALKEYSEARCH_SRC_ATTRIBUTE_DATA_TYPE_H_

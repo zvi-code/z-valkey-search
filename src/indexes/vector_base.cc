@@ -561,20 +561,15 @@ void VectorBase::AddPrefilteredKey(
   }
 }
 
-absl::string_view TrimBrackets(absl::string_view input) {
-  if (absl::ConsumePrefix(&input, "[")) {
-    absl::ConsumeSuffix(&input, "]");
-    return TrimBrackets(input);
-  }
-  return input;
-}
-
 vmsdk::UniqueRedisString VectorBase::NormalizeStringRecord(
-    vmsdk::UniqueRedisString input) const {
+    vmsdk::UniqueRedisString record) const {
   CHECK_EQ(GetDataTypeSize(), sizeof(float));
-  auto input_str = TrimBrackets(vmsdk::ToStringView(input.get()));
+  auto record_str = vmsdk::ToStringView(record.get());
+  if (absl::ConsumePrefix(&record_str, "[")) {
+    absl::ConsumeSuffix(&record_str, "]");
+  }
   std::vector<std::string> float_strings =
-      absl::StrSplit(input_str, ',', absl::SkipWhitespace());
+      absl::StrSplit(record_str, ',', absl::SkipWhitespace());
   std::string binary_string;
   binary_string.reserve(float_strings.size() * sizeof(float));
   for (const auto &float_str : float_strings) {

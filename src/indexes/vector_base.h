@@ -156,7 +156,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       std::priority_queue<std::pair<float, hnswlib::labeltype>>& results,
       absl::flat_hash_set<hnswlib::labeltype>& top_keys) const;
   vmsdk::UniqueRedisString NormalizeStringRecord(
-      vmsdk::UniqueRedisString input) const override;
+      vmsdk::UniqueRedisString record) const override;
   uint64_t GetRecordCount() const override;
   template <typename T>
   absl::StatusOr<std::deque<Neighbor>> CreateReply(
