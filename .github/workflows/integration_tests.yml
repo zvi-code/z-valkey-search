@@ -10,7 +10,7 @@ on:
   workflow_dispatch: # allow manual triggering
 
 concurrency:
-  group: clang-${{ github.head_ref || github.ref }}
+  group: integration-tests-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -31,4 +31,4 @@ jobs:
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
     - name: Run Tests
-      run: docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image sudo ./build.sh --run-integration-tests --test-errors-stdout
+      run: docker run --privileged --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image sudo ./build.sh --run-integration-tests --test-errors-stdout
