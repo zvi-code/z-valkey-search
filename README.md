@@ -63,6 +63,8 @@ sudo apt install -y clangd          \
                     libgtest-dev    \
                     ninja-build     \
                     libssl-dev      \
+                    clang-tidy      \
+                    clang-format    \
                     libsystemd-dev
 ```
 
@@ -83,7 +85,12 @@ sudo yum update
 sudo yum install -y gcc             \
                     gcc-c++         \
                     cmake           \
+                    gtest           \
+                    gtest-devel     \
                     ninja-build     \
+                    openssl-devel   \
+                    clang-tidy      \
+                    clang-format    \
                     systemd-devel
 ```
 
@@ -107,7 +114,29 @@ Run unit tests with:
 ./build.sh --run-tests
 ```
 
-Run integration tests with:
+#### Integration Tests
+
+Install required dependencies (Ubuntu / Debian):
+
+```sh
+sudo apt update
+sudo apt install -y lsb-release      \
+                     curl            \
+                     coreutils       \
+                     libsystemd-dev  \
+                     python3-pip     \
+                     python3.12-venv \
+                     locales-all     \
+                     locales         \
+                     gpg
+
+curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
+sudo apt update
+sudo apt-get install -y memtier-benchmark
+```
+
+Run the integration tests with:
 
 ```sh
 ./build.sh --run-integration-tests
@@ -145,7 +174,7 @@ For development purposes, it is recommended to use <b>VSCode</b>, which is alrea
 
 2. <b>Run the dev container setup script</b>
     - Issue the following command from the cloned repo root directory:
-        ```bash
+        ```sh
         .devcontainer/setup.sh
         ```
 
