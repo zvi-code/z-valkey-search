@@ -28,7 +28,7 @@ If replica lag is acceptable, users can achieve horizontal query scaling by dire
 
 ## Performance
 
-Valkey-Search achieves high performance by storing vectors in-memory and applying optimizations throughout the stack to efficiently use host resources, such as:
+Valkey-Search achieves high performance by storing vectors in-memory and applying optimizations throughout the stack to efficiently utilize the host resources, such as:
 
 - **Parallelism:**  Threading model that enables lock-free execution in the read path.
 - **CPU Cache Efficiency:** Designed to promote efficient use of CPU cache.
@@ -164,7 +164,7 @@ valkey-server "--loadmodule /path/to/valkeysearch.so --reader-threads 64 --write
 
 ## Development Environment
 
-For development purposes, it is recommended to use <b>VSCode</b>, which is already configured to run within a Docker container and is integrated with clang-tidy and clang-format. Follow these steps to set up the environment:
+For development purposes, it is recommended to use <b>VSCode</b>, which is already configured to run within a Docker container and is integrated with clang-tidy and clang-format. Follow these steps to set up your environment:
 
 1. <b>Install VSCode Extensions:</b>
     - Install the `Dev Containers` extension by Microsoft in VSCode.
