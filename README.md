@@ -74,8 +74,8 @@ sudo apt install -y clangd          \
 ```sh
 sudo apt update
 sudo apt install -y gcc-12 g++-12
-sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 90
-sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 90
+sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 1000
+sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 1000
 ```
 
 #### RedHat / CentOS / Amazon Linux
