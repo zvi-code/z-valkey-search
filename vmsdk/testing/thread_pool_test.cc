@@ -269,10 +269,9 @@ TEST_F(ThreadPoolTest, priority) {
   std::atomic<int> pending_run_low_priority = tasks;
   std::atomic<int> pending_run_high_priority = tasks;
   absl::BlockingCounter pending_tasks(tasks * 2);
+  absl::Mutex mutex;
   {
-    absl::Mutex mutex;
     absl::MutexLock lock(&mutex);
-
     for (size_t i = 0; i < thread_pool.Size(); ++i) {
       EXPECT_TRUE(
           thread_pool.Schedule([&mutex] { absl::MutexLock lock(&mutex); },
