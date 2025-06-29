@@ -143,3 +143,131 @@ Node 11: [new neighbors based on new data]
 2. **Automatic Healing**: When nodes are replaced, the graph "heals" by promoting extended neighbors
 3. **Performance**: No need to rebuild entire neighbor lists
 4. **Memory Efficiency**: Only pay for extra storage when configured
+
+
+## How to Run the Tests
+
+The project uses CMake for building, so you have a few options:
+
+### Option 1: Build and Run Individual Tests
+```bash
+# Build the project first
+mkdir build && cd build
+cmake ..
+make
+
+# Run the unit tests
+./extended_neighbors_test
+
+# Run the integration tests  
+./extended_neighbors_integration_test
+```
+
+### Option 2: Use the Build Script
+```bash
+# Use the provided build script
+./build.sh
+
+# Then run the tests from the build directory
+cd build
+./extended_neighbors_test
+./extended_neighbors_integration_test
+```
+
+### Option 3: Run All Tests
+```bash
+# Build and run all tests (including the new ones)
+cd build
+make && ctest
+```
+
+## Test Coverage and Use-Cases
+
+I created two comprehensive test suites that cover different aspects:
+
+### **Unit Tests** (`extended_neighbors_test.cc`)
+**Covers core functionality and correctness:**
+
+1. **Configuration Validation**
+   - Extended list factor settings (1.5x, 2.0x, etc.)
+   - Memory allocation increases
+   - Parameter validation
+
+2. **Core Functionality**
+   - Extended neighbor storage and retrieval
+   - Bit packing for neighbor counts (16-bit regular + 16-bit total)
+   - Memory layout validation
+
+3. **Deletion Scenarios**
+   - Basic deletion handling
+   - Extended neighbor promotion when regular neighbors are deleted
+   - Interaction with `replace_deleted` functionality
+
+4. **Serialization/Persistence**
+   - Save/load cycles preserving extended neighbor data
+   - Configuration persistence across restarts
+
+5. **Performance Validation**
+   - Insertion, search, and deletion timing
+   - Memory overhead measurements
+   - Stress testing with 500+ vectors
+
+### **Integration Tests** (`extended_neighbors_integration_test.cc`)
+**Covers real-world scenarios and quality metrics:**
+
+1. **Search Quality Comparison**
+   - Standard HNSW vs Extended HNSW
+   - Gaussian and clustered datasets
+   - Recall, precision, and timing metrics
+
+2. **Robustness Under Deletions**
+   - Random deletion patterns (25% of vectors)
+   - Sequential deletions (first 25%)
+   - Clustered deletions (every 4th vector)
+   - Quality degradation analysis
+
+3. **Performance Impact Analysis**
+   - Memory usage scaling (1.5x, 2.0x factors)
+   - Insertion time overhead
+   - Search time comparison
+   - Quality vs performance trade-offs
+
+4. **Scalability Testing**
+   - Large datasets (5000+ vectors)
+   - Performance with different extended factors
+   - Memory usage validation
+
+5. **Replace Deleted Integration**
+   - Extended neighbors with vector replacement
+   - Quality maintenance after replacements
+
+## Key Benefits Being Tested
+
+The tests validate that extended neighbors provide:
+
+- **Better search quality** when vectors are deleted
+- **Graceful degradation** under various deletion patterns  
+- **Reasonable performance overhead** (typically <2x insertion time)
+- **Proper memory scaling** (proportional to extended factor)
+- **Correct serialization** of extended neighbor data
+
+## Sample Output
+
+When you run the tests, you'll see detailed metrics like:
+```
+Extended Neighbors Performance Test Results:
+  Insertion time: 1250.3 ms
+  Search time: 2.1 ms
+  Deletion time: 45.2 ms
+
+Standard HNSW Metrics:
+  Recall: 0.92
+  Precision: 0.94
+  Avg Search Time: 1.8 ms
+
+Extended HNSW Metrics:
+  Recall: 0.94
+  Precision: 0.96  
+  Avg Search Time: 2.1 ms
+```
+

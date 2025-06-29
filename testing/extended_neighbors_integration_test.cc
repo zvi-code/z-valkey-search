@@ -53,29 +53,19 @@ constexpr static int kM = 16;
 constexpr static int kEFConstruction = 32;
 constexpr static int kMaxElements = 2000;
 
-// Helper function to create HNSW vector index proto with extended neighbors
-// NOTE: This function would need to be updated once VectorHNSW supports extended neighbors
-data_model::VectorIndex CreateExtendedHNSWVectorIndexProto(
-    int dimensions, data_model::DistanceMetric distance_metric, int initial_cap,
+// Helper function to create test HNSW indices with extended neighbors
+// NOTE: This creates direct HNSW indices for testing, bypassing the VectorIndex proto
+std::unique_ptr<hnswlib::HierarchicalNSW<float>> CreateTestHNSWIndex(
+    hnswlib::SpaceInterface<float>* space, int max_elements,
     int m, int ef_construction, size_t ef_runtime, 
     bool use_extended_neighbors = true, float extended_list_factor = 1.5f) {
   
-  data_model::VectorIndex vector_index_proto;
-  vector_index_proto.set_dimension_count(dimensions);
-  vector_index_proto.set_distance_metric(distance_metric);
-  vector_index_proto.set_initial_cap(initial_cap);
-  
-  auto hnsw_algorithm = std::make_unique<data_model::HNSWAlgorithm>();
-  hnsw_algorithm->set_m(m);
-  hnsw_algorithm->set_ef_construction(ef_construction);
-  hnsw_algorithm->set_ef_runtime(ef_runtime);
-  
-  // TODO: Add extended neighbors parameters to the proto once supported
-  // hnsw_algorithm->set_use_extended_neighbors(use_extended_neighbors);
-  // hnsw_algorithm->set_extended_list_factor(extended_list_factor);
-  
-  vector_index_proto.set_allocated_hnsw_algorithm(hnsw_algorithm.release());
-  return vector_index_proto;
+  return std::make_unique<hnswlib::HierarchicalNSW<float>>(
+      space, max_elements, m, ef_construction, 200, // random seed
+      false,  // allow_replace_deleted
+      use_extended_neighbors,
+      extended_list_factor
+  );
 }
 
 // Helper to create test datasets
