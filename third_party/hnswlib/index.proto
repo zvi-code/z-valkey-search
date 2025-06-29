@@ -23,4 +23,11 @@ message HNSWIndexHeader {
     uint64 M = 11;
     double mult = 12;
     uint64 ef_construction = 13;
+    // Extended neighbors configuration
+    optional bool use_extended_neighbors = 14;  // Adjust field number as needed
+    optional float extended_list_factor = 15;   // Factor for extended list size
+    
+    // Optional: store actual extended sizes for validation
+    optional uint32 max_m_extended = 16;
+    optional uint32 max_m0_extended = 17;
 }

@@ -17,5 +17,27 @@
         "--query-driver=**"
     ],
     "clangd.inactiveRegions.useBackgroundHighlight": true,
-    "clangd.enableCodeCompletion": true
+    "clangd.enableCodeCompletion": true,
+    "terminal.integrated.profiles.linux": {
+        "zsh": {
+            "path": "zsh"
+        },
+        "fish": {
+            "path": "fish"
+        },
+        "tmux": {
+            "path": "tmux",
+            "icon": "terminal-tmux"
+        },
+        "pwsh": {
+            "path": "pwsh",
+            "icon": "terminal-powershell"
+        }
+    },
+    "terminal.integrated.suggest.providers": {
+        
+        "terminal-suggest": true,
+        "pwsh-shell-integration": true,
+        "lsp": true
+    }
 }

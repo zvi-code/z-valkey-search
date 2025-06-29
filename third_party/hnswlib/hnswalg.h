@@ -47,8 +47,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   static const unsigned int ENCODING_VERSION = 0;
 
   size_t max_elements_{0};
-  mutable std::atomic<size_t> cur_element_count_{
-      0};  // current number of elements
+  mutable std::atomic<size_t> cur_element_count_{0};  // current number of elements
   size_t size_data_per_element_{0};
   size_t serialize_size_data_per_element_{0};
   size_t size_links_per_element_{0};
@@ -59,6 +58,12 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   size_t ef_construction_{0};
   size_t ef_{0};
   const size_t k_elements_per_chunk{10 * 1024};
+
+  // Extended neighbors configuration
+  float extended_list_factor_{1.5};  // Factor to multiply M for extended list size
+  bool use_extended_neighbors_{true};  // Whether to use extended neighbors feature
+  size_t maxM_extended_{0};  // Max neighbors including extended (M * extended_list_factor)
+  size_t maxM0_extended_{0}; // Max neighbors at layer 0 including extended
 
   double mult_{0.0}, revSize_{0.0};
   int maxlevel_{0};
@@ -94,29 +99,32 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   mutable std::atomic<long> metric_distance_computations{0};
   mutable std::atomic<long> metric_hops{0};
 
-  bool allow_replace_deleted_ = false;  // flag to replace deleted elements
+  bool allow_replace_deleted_ = true;  // flag to replace deleted elements
                                         // (marked as deleted) during insertions
 
   std::mutex deleted_elements_lock;  // lock for deleted_elements
-  std::unordered_set<tableint>
-      deleted_elements;  // contains internal ids of deleted elements
+  std::unordered_set<tableint> deleted_elements;  // contains internal ids of deleted elements
 
   HierarchicalNSW(SpaceInterface<dist_t> *s) {}
 
   HierarchicalNSW(SpaceInterface<dist_t> *s, const std::string &location,
                   bool nmslib = false, size_t max_elements = 0,
-                  bool allow_replace_deleted = false)
+                  bool allow_replace_deleted = true)
       : allow_replace_deleted_(allow_replace_deleted) {
     LoadIndex(location, s, max_elements);
   }
 
   HierarchicalNSW(SpaceInterface<dist_t> *s, size_t max_elements, size_t M = 16,
                   size_t ef_construction = 200, size_t random_seed = 100,
-                  bool allow_replace_deleted = false)
+                  bool allow_replace_deleted = true,
+                  bool use_extended_neighbors = true,
+                  float extended_list_factor = 1.5)
       : label_op_locks_(MAX_LABEL_OPERATION_LOCKS),
         link_list_locks_(max_elements),
         element_levels_(max_elements),
-        allow_replace_deleted_(allow_replace_deleted) {
+        allow_replace_deleted_(allow_replace_deleted),
+        use_extended_neighbors_(use_extended_neighbors),
+        extended_list_factor_(extended_list_factor) {
     max_elements_ = max_elements;
     num_deleted_ = 0;
     vector_size_ = s->get_data_size();
@@ -135,17 +143,25 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     }
     maxM_ = M_;
     maxM0_ = M_ * 2;
+    
+    // Calculate extended sizes
+    if (use_extended_neighbors_) {
+      maxM_extended_ = static_cast<size_t>(M_ * extended_list_factor_);
+      maxM0_extended_ = static_cast<size_t>(maxM0_ * extended_list_factor_);
+    } else {
+      maxM_extended_ = maxM_;
+      maxM0_extended_ = maxM0_;
+    }
+    
     ef_construction_ = std::max(ef_construction, M_);
     ef_ = 10;
 
     level_generator_.seed(random_seed);
     update_probability_generator_.seed(random_seed + 1);
 
-    size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
-    size_data_per_element_ =
-        size_links_level0_ + sizeof(char *) + sizeof(labeltype);
-    serialize_size_data_per_element_ =
-        size_links_level0_ + vector_size_ + sizeof(labeltype);
+    size_links_level0_ = maxM0_extended_ * sizeof(tableint) + sizeof(linklistsizeint);
+    size_data_per_element_ = size_links_level0_ + sizeof(char *) + sizeof(labeltype);
+    serialize_size_data_per_element_ = size_links_level0_ + vector_size_ + sizeof(labeltype);
     offsetData_ = size_links_level0_;
     label_offset_ = size_links_level0_ + sizeof(char *);
     offsetLevel0_ = 0;
@@ -164,8 +180,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
     linkLists_ = std::make_unique<ChunkedArray>(
         sizeof(void *), k_elements_per_chunk, max_elements);
-    size_links_per_element_ =
-        maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
+    size_links_per_element_ = maxM_extended_ * sizeof(tableint) + sizeof(linklistsizeint);
     mult_ = 1 / log(1.0 * M_);
     revSize_ = 1.0 / mult_;
   }
@@ -242,6 +257,72 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
   size_t getDeletedCount() { return num_deleted_; }
 
+  // Modified getListCount to return regular neighbor count
+  unsigned short int getListCount(linklistsizeint *ptr) const {
+    if (use_extended_neighbors_) {
+      // Lower 16 bits store regular count
+      return *((unsigned short int *)ptr) & 0xFFFF;
+    }
+    return *((unsigned short int *)ptr);
+  }
+
+  // New function to get total count including extended neighbors
+  unsigned short int getTotalListCount(linklistsizeint *ptr) const {
+    if (use_extended_neighbors_) {
+      // Upper 16 bits store total count
+      return (*((unsigned int *)ptr) >> 16) & 0xFFFF;
+    }
+    return getListCount(ptr);
+  }
+
+  // Modified setListCount to handle both regular and total counts
+  void setListCount(linklistsizeint *ptr, unsigned short int size) const {
+    if (use_extended_neighbors_) {
+      // Set only regular count, preserve total count
+      unsigned int current = *((unsigned int *)ptr);
+      unsigned int total_count = (current >> 16) & 0xFFFF;
+      *((unsigned int *)ptr) = (total_count << 16) | (size & 0xFFFF);
+    } else {
+      *((unsigned short int *)(ptr)) = size;
+    }
+  }
+
+  // New function to set both regular and total counts
+  void setListCounts(linklistsizeint *ptr, unsigned short int regular_size, 
+                     unsigned short int total_size) const {
+    if (use_extended_neighbors_) {
+      *((unsigned int *)ptr) = ((total_size & 0xFFFF) << 16) | (regular_size & 0xFFFF);
+    } else {
+      *((unsigned short int *)(ptr)) = regular_size;
+    }
+  }
+
+  /*
+   * Checks the first 16 bits of the memory to see if the element is marked
+   * deleted.
+   */
+  bool isMarkedDeleted(tableint internalId) const {
+    unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId)) + 2;
+    return *ll_cur & DELETE_MARK;
+  }
+
+  linklistsizeint *get_linklist0(tableint internal_id) const {
+    return (linklistsizeint *)((*data_level0_memory_)[internal_id] +
+                               offsetLevel0_);
+  }
+
+  linklistsizeint *get_linklist(tableint internal_id, int level) const {
+    return (linklistsizeint *)(*reinterpret_cast<char **>(
+                                   (*linkLists_)[internal_id]) +
+                               (level - 1) * size_links_per_element_);
+  }
+
+  linklistsizeint *get_linklist_at_level(tableint internal_id,
+                                         int level) const {
+    return level == 0 ? get_linklist0(internal_id)
+                      : get_linklist(internal_id, level);
+  }
+
   std::priority_queue<std::pair<dist_t, tableint>,
                       std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
   searchBaseLayer(tableint ep_id, const void *data_point, int layer) {
@@ -283,16 +364,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
       std::unique_lock<std::mutex> lock(link_list_locks_[curNodeNum]);
 
-      int *data;  // = (int *)(linkList0_ + curNodeNum *
-                  // size_links_per_element0_);
+      int *data;
       if (layer == 0) {
         data = (int *)get_linklist0(curNodeNum);
       } else {
         data = (int *)get_linklist(curNodeNum, layer);
-        //                    data = (int *) ((*linkLists_)[curNodeNum] + (layer
-        //                    - 1) * size_links_per_element_);
       }
       size_t size = getListCount((linklistsizeint *)data);
+      size_t total_size = getTotalListCount((linklistsizeint *)data);
       tableint *datal = (tableint *)(data + 1);
 #ifdef USE_PREFETCH
       __builtin_prefetch((char *)(visited_array + *(data + 1)), 0, 3);
@@ -303,7 +382,6 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
       for (size_t j = 0; j < size; j++) {
         tableint candidate_id = *(datal + j);
-//                    if (candidate_id == 0) continue;
 #ifdef USE_PREFETCH
         if (j + 1 < size) {
           __builtin_prefetch((char *)(visited_array + *(datal + j + 1)), 0, 3);
@@ -311,6 +389,24 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         }
 #endif
         if (visited_array[candidate_id] == visited_array_tag) continue;
+        
+        // If using extended neighbors and this neighbor is deleted, 
+        // try to find non-deleted extended neighbor
+        if (use_extended_neighbors_ && isMarkedDeleted(candidate_id)) {
+          bool found_replacement = false;
+          for (size_t ext_idx = size; ext_idx < total_size; ext_idx++) {
+            tableint extended_id = *(datal + ext_idx);
+            if (!isMarkedDeleted(extended_id) && 
+                visited_array[extended_id] != visited_array_tag) {
+              candidate_id = extended_id;
+              found_replacement = true;
+              break;
+            }
+          }
+          // If no suitable extended neighbor found, skip this neighbor
+          if (!found_replacement) continue;
+        }
+        
         visited_array[candidate_id] = visited_array_tag;
         char *currObj1 = (getDataByInternalId(candidate_id));
 
@@ -402,8 +498,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       tableint current_node_id = current_node_pair.second;
       int *data = (int *)get_linklist0(current_node_id);
       size_t size = getListCount((linklistsizeint *)data);
-      //                bool cur_node_deleted =
-      //                isMarkedDeleted(current_node_id);
+      size_t total_size = getTotalListCount((linklistsizeint *)data);
+      
       if (collect_metrics) {
         metric_hops++;
         metric_distance_computations += size;
@@ -419,7 +515,6 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
       for (size_t j = 1; j <= size; j++) {
         int candidate_id = *(data + j);
-//                    if (candidate_id == 0) continue;
 #ifdef USE_PREFETCH
         if (j + 1 < size) {
           __builtin_prefetch((char *)(visited_array + *(data + j + 1)), 0, 3);
@@ -427,6 +522,25 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
               (*data_level0_memory_)[(*(data + j + 1))] + offsetData_, 0, 3);
         }
 #endif
+        
+        // If we encounter a deleted node and have extended neighbors, find a non-deleted one
+        if (use_extended_neighbors_ && isMarkedDeleted(candidate_id)) {
+          bool found_non_deleted = false;
+          // Try to find a non-deleted extended neighbor
+          for (size_t ext_idx = size + 1; ext_idx <= total_size; ext_idx++) {
+            tableint extended_id = *(data + ext_idx);
+            if (!isMarkedDeleted(extended_id)) {
+              candidate_id = extended_id;
+              found_non_deleted = true;
+              break;
+            }
+          }
+          // If all extended neighbors are also deleted, skip this neighbor entirely
+          if (!found_non_deleted) {
+            continue;
+          }
+        }
+        
         if (!(visited_array[candidate_id] == visited_array_tag)) {
           visited_array[candidate_id] = visited_array_tag;
 
@@ -447,8 +561,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #ifdef USE_PREFETCH
             __builtin_prefetch(
                 (*data_level0_memory_)[candidate_set.top().second] +
-                    offsetLevel0_,  ///////////
-                0, 3);              ////////////////////////
+                    offsetLevel0_,
+                0, 3);
 #endif
 
             if (bare_bone_search ||
@@ -534,23 +648,6 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     }
   }
 
-  linklistsizeint *get_linklist0(tableint internal_id) const {
-    return (linklistsizeint *)((*data_level0_memory_)[internal_id] +
-                               offsetLevel0_);
-  }
-
-  linklistsizeint *get_linklist(tableint internal_id, int level) const {
-    return (linklistsizeint *)(*reinterpret_cast<char **>(
-                                   (*linkLists_)[internal_id]) +
-                               (level - 1) * size_links_per_element_);
-  }
-
-  linklistsizeint *get_linklist_at_level(tableint internal_id,
-                                         int level) const {
-    return level == 0 ? get_linklist0(internal_id)
-                      : get_linklist(internal_id, level);
-  }
-
   tableint mutuallyConnectNewElement(
       const void *data_point, tableint cur_c,
       std::priority_queue<std::pair<dist_t, tableint>,
@@ -558,13 +655,21 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                           CompareByFirst> &top_candidates,
       int level, bool isUpdate) {
     size_t Mcurmax = level ? maxM_ : maxM0_;
-    getNeighborsByHeuristic2(top_candidates, M_);
+    size_t Mcurmax_extended = level ? maxM_extended_ : maxM0_extended_;
+    
+    // Get more candidates if using extended neighbors
+    if (use_extended_neighbors_) {
+      getNeighborsByHeuristic2(top_candidates, Mcurmax_extended);
+    } else {
+      getNeighborsByHeuristic2(top_candidates, M_);
+    }
+    
     if (top_candidates.size() > M_)
       throw std::runtime_error(
           "Should be not be more than M_ candidates returned by the heuristic");
 
     std::vector<tableint> selectedNeighbors;
-    selectedNeighbors.reserve(M_);
+    selectedNeighbors.reserve(Mcurmax_extended);
     while (top_candidates.size() > 0) {
       selectedNeighbors.push_back(top_candidates.top().second);
       top_candidates.pop();
@@ -595,7 +700,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         throw std::runtime_error(
             "The newly inserted element should have blank link list");
       }
-      setListCount(ll_cur, selectedNeighbors.size());
+      
+      // Set both regular and total counts
+      size_t regular_size = std::min(selectedNeighbors.size(), (size_t)Mcurmax);
+      setListCounts(ll_cur, regular_size, selectedNeighbors.size());
+      
       tableint *data = (tableint *)(ll_cur + 1);
       for (size_t idx = 0; idx < selectedNeighbors.size(); idx++) {
         if (data[idx] && !isUpdate)
@@ -609,6 +718,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     }
 
     for (size_t idx = 0; idx < selectedNeighbors.size(); idx++) {
+      // Skip if this neighbor is at a lower level than current
+      if (level > element_levels_[selectedNeighbors[idx]]) continue;
+      
       std::unique_lock<std::mutex> lock(
           link_list_locks_[selectedNeighbors[idx]]);
 
@@ -619,6 +731,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         ll_other = get_linklist(selectedNeighbors[idx], level);
 
       size_t sz_link_list_other = getListCount(ll_other);
+      size_t sz_total_other = getTotalListCount(ll_other);
 
       if (sz_link_list_other > Mcurmax)
         throw std::runtime_error("Bad value of sz_link_list_other");
@@ -632,7 +745,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
       bool is_cur_c_present = false;
       if (isUpdate) {
-        for (size_t j = 0; j < sz_link_list_other; j++) {
+        // Check both regular and extended neighbors
+        for (size_t j = 0; j < sz_total_other; j++) {
           if (data[j] == cur_c) {
             is_cur_c_present = true;
             break;
@@ -645,8 +759,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       // the heuristics.
       if (!is_cur_c_present) {
         if (sz_link_list_other < Mcurmax) {
+          // Add to regular neighbors
           data[sz_link_list_other] = cur_c;
-          setListCount(ll_other, sz_link_list_other + 1);
+          setListCounts(ll_other, sz_link_list_other + 1, sz_total_other + 1);
+        } else if (use_extended_neighbors_ && sz_total_other < Mcurmax_extended) {
+          // Add to extended neighbors
+          data[sz_total_other] = cur_c;
+          setListCounts(ll_other, sz_link_list_other, sz_total_other + 1);
         } else {
           // finding the "weakest" element to replace it with the new one
           dist_t d_max = fstdistfunc_(
@@ -659,7 +778,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
               candidates;
           candidates.emplace(d_max, cur_c);
 
-          for (size_t j = 0; j < sz_link_list_other; j++) {
+          // Include all neighbors (regular and extended)
+          for (size_t j = 0; j < sz_total_other; j++) {
             candidates.emplace(
                 fstdistfunc_(getDataByInternalId(data[j]),
                              getDataByInternalId(selectedNeighbors[idx]),
@@ -667,33 +787,145 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 data[j]);
           }
 
-          getNeighborsByHeuristic2(candidates, Mcurmax);
+          getNeighborsByHeuristic2(candidates, Mcurmax_extended);
 
           int indx = 0;
+          size_t regular_count = 0;
           while (candidates.size() > 0) {
             data[indx] = candidates.top().second;
+            if (indx < Mcurmax) regular_count++;
             candidates.pop();
             indx++;
           }
 
-          setListCount(ll_other, indx);
-          // Nearest K:
-          /*int indx = -1;
-          for (int j = 0; j < sz_link_list_other; j++) {
-              dist_t d = fstdistfunc_(getDataByInternalId(data[j]),
-          getDataByInternalId(rez[idx]), dist_func_param_); if (d > d_max) {
-                  indx = j;
-                  d_max = d;
-              }
-          }
-          if (indx >= 0) {
-              data[indx] = cur_c;
-          } */
+          setListCounts(ll_other, regular_count, indx);
         }
       }
     }
 
     return next_closest_entry_point;
+  }
+
+  // Helper function to promote extended neighbor to regular when a node is deleted
+  void promoteExtendedNeighbor(tableint node_id, int level, tableint deleted_neighbor) {
+    if (!use_extended_neighbors_) return;
+    
+    std::unique_lock<std::mutex> lock(link_list_locks_[node_id]);
+    
+    linklistsizeint *ll_cur = get_linklist_at_level(node_id, level);
+    size_t regular_size = getListCount(ll_cur);
+    size_t total_size = getTotalListCount(ll_cur);
+    
+    if (regular_size >= total_size) return; // No extended neighbors
+    
+    tableint *data = (tableint *)(ll_cur + 1);
+    
+    // Find the deleted neighbor in regular list
+    int deleted_pos = -1;
+    for (size_t i = 0; i < regular_size; i++) {
+      if (data[i] == deleted_neighbor) {
+        deleted_pos = i;
+        break;
+      }
+    }
+    
+    if (deleted_pos >= 0 && regular_size < total_size) {
+      // Move first extended neighbor to replace deleted one
+      data[deleted_pos] = data[regular_size];
+      
+      // Shift remaining extended neighbors
+      for (size_t i = regular_size; i < total_size - 1; i++) {
+        data[i] = data[i + 1];
+      }
+      
+      // Update count
+      setListCounts(ll_cur, regular_size, total_size - 1);
+    }
+  }
+
+  // Helper function to promote extended neighbors when a node is being replaced
+  void promoteExtendedNeighborsForReplacedNode(tableint replaced_node) {
+    // For each level of the replaced node
+    for (int level = 0; level <= element_levels_[replaced_node]; level++) {
+      linklistsizeint *ll_replaced = get_linklist_at_level(replaced_node, level);
+      size_t neighbor_count = getTotalListCount(ll_replaced);
+      tableint *neighbors = (tableint *)(ll_replaced + 1);
+      
+      // For each neighbor of the replaced node
+      for (size_t i = 0; i < neighbor_count; i++) {
+        tableint neighbor = neighbors[i];
+        if (!isMarkedDeleted(neighbor)) {
+          // In the neighbor's list, find the replaced node and promote an extended neighbor
+          promoteExtendedNeighborForDeletedNode(neighbor, level, replaced_node);
+        }
+      }
+    }
+  }
+
+  // Helper function to promote extended neighbor in a specific node's neighbor list
+  void promoteExtendedNeighborForDeletedNode(tableint node_id, int level, tableint deleted_neighbor) {
+    if (!use_extended_neighbors_) return;
+    
+    std::unique_lock<std::mutex> lock(link_list_locks_[node_id]);
+    
+    linklistsizeint *ll_cur = get_linklist_at_level(node_id, level);
+    size_t regular_size = getListCount(ll_cur);
+    size_t total_size = getTotalListCount(ll_cur);
+    
+    if (regular_size >= total_size) return; // No extended neighbors to promote
+    
+    tableint *data = (tableint *)(ll_cur + 1);
+    
+    // Find the deleted neighbor in the regular list
+    int deleted_pos = -1;
+    for (size_t i = 0; i < regular_size; i++) {
+      if (data[i] == deleted_neighbor) {
+        deleted_pos = i;
+        break;
+      }
+    }
+    
+    // If found in regular list and we have extended neighbors
+    if (deleted_pos >= 0 && regular_size < total_size) {
+      // Find the first non-deleted extended neighbor
+      tableint promoted_neighbor = 0;
+      int promoted_pos = -1;
+      
+      for (size_t i = regular_size; i < total_size; i++) {
+        if (!isMarkedDeleted(data[i])) {
+          promoted_neighbor = data[i];
+          promoted_pos = i;
+          break;
+        }
+      }
+      
+      if (promoted_pos >= 0) {
+        // Move the extended neighbor to the regular position
+        data[deleted_pos] = promoted_neighbor;
+        
+        // Shift remaining extended neighbors left
+        for (size_t i = promoted_pos; i < total_size - 1; i++) {
+          data[i] = data[i + 1];
+        }
+        
+        // Update total count (regular stays same, total decreases by 1)
+        setListCounts(ll_cur, regular_size, total_size - 1);
+      } else {
+        // No non-deleted extended neighbors found, just remove the deleted one
+        // by swapping with last regular neighbor
+        if (deleted_pos < regular_size - 1) {
+          data[deleted_pos] = data[regular_size - 1];
+        }
+        
+        // Move all extended neighbors one position left
+        for (size_t i = regular_size - 1; i < total_size - 1; i++) {
+          data[i] = data[i + 1];
+        }
+        
+        // Update counts
+        setListCounts(ll_cur, regular_size - 1, total_size - 1);
+      }
+    }
   }
 
   void resizeIndex(size_t new_max_elements) {
@@ -762,6 +994,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     header.set_m(M_);
     header.set_mult(mult_);
     header.set_ef_construction(ef_construction_);
+    header.set_use_extended_neighbors(use_extended_neighbors_);
+    header.set_extended_list_factor(extended_list_factor_);
+    
     std::string serialized;
     if (!header.SerializeToString(&serialized)) {
       return absl::InternalError("Could not serialize HNSW header");
@@ -790,9 +1025,21 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     };
 
     for (size_t i = 0; i < cur_element_count_; i++) {
-      unsigned int linkListSize =
-          element_levels_[i] > 0 ? size_links_per_element_ * element_levels_[i]
-                                 : 0;
+      unsigned int linkListSize = 0;
+      if (element_levels_[i] > 0) {
+        if (use_extended_neighbors_) {
+          // Calculate actual size based on total neighbors stored
+          linkListSize = 0;
+          for (int level = 1; level <= element_levels_[i]; level++) {
+            linklistsizeint *ll = get_linklist(i, level);
+            size_t total_count = getTotalListCount(ll);
+            linkListSize += total_count * sizeof(tableint) + sizeof(linklistsizeint);
+          }
+        } else {
+          linkListSize = size_links_per_element_ * element_levels_[i];
+        }
+      }
+      
       size_t size_to_serialize = htole64(static_cast<size_t>(linkListSize));
       VMSDK_RETURN_IF_ERROR(output.SaveChunk(
           reinterpret_cast<const char *>(&size_to_serialize), sizeof(size_t)));
@@ -829,13 +1076,34 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     mult_ = header->mult();
     ef_construction_ = header->ef_construction();
 
+    // Load extended neighbor configuration
+    if (header->has_use_extended_neighbors()) {
+      use_extended_neighbors_ = header->use_extended_neighbors();
+      extended_list_factor_ = header->extended_list_factor();
+    } else {
+      // Default for backward compatibility
+      use_extended_neighbors_ = true;
+      extended_list_factor_ = 1.0;
+    }
+    
+    // Recalculate extended sizes
+    if (use_extended_neighbors_) {
+      maxM_extended_ = static_cast<size_t>(M_ * extended_list_factor_);
+      maxM0_extended_ = static_cast<size_t>(maxM0_ * extended_list_factor_);
+    } else {
+      maxM_extended_ = maxM_;
+      maxM0_extended_ = maxM0_;
+    }
+
     size_t max_elements = max_elements_i;
     if (max_elements < cur_element_count_) {
       max_elements = max_elements_;
     }
     max_elements_ = max_elements;
 
-    size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
+    // Update size calculations
+    size_links_level0_ = maxM0_extended_ * sizeof(tableint) + sizeof(linklistsizeint);
+    size_links_per_element_ = maxM_extended_ * sizeof(tableint) + sizeof(linklistsizeint);
 
     vector_size_ = s->get_data_size();
     size_data_per_element_ =
@@ -860,9 +1128,6 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));
     }
-
-    size_links_per_element_ =
-        maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
 
     std::vector<std::mutex>(max_elements).swap(link_list_locks_);
     std::vector<std::mutex>(MAX_LABEL_OPERATION_LOCKS).swap(label_op_locks_);
@@ -1018,23 +1283,6 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   }
 
   /*
-   * Checks the first 16 bits of the memory to see if the element is marked
-   * deleted.
-   */
-  bool isMarkedDeleted(tableint internalId) const {
-    unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId)) + 2;
-    return *ll_cur & DELETE_MARK;
-  }
-
-  unsigned short int getListCount(linklistsizeint *ptr) const {
-    return *((unsigned short int *)ptr);
-  }
-
-  void setListCount(linklistsizeint *ptr, unsigned short int size) const {
-    *((unsigned short int *)(ptr)) = *((unsigned short int *)&size);
-  }
-
-  /*
    * Adds point. Updates the point if it is already in the index.
    * If replacement of deleted elements is enabled: replaces previously deleted
    * point if any, updating it with new point
@@ -1067,6 +1315,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     if (!is_vacant_place) {
       addPoint(data_point, label, -1);
     } else {
+      // If using extended neighbors, handle promotion before replacing the node
+      if (use_extended_neighbors_) {
+        // For each neighbor of the node being replaced, promote extended neighbors
+        // This must be done BEFORE we update the node data
+        promoteExtendedNeighborsForReplacedNode(internal_id_replaced);
+      }
+      
       // we assume that there are no concurrent operations on deleted element
       labeltype label_replaced = getExternalLabel(internal_id_replaced);
       setExternalLabel(internal_id_replaced, label);
@@ -1121,9 +1376,6 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       }
 
       for (auto &&neigh : sNeigh) {
-        // if (neigh == internalId)
-        //     continue;
-
         std::priority_queue<std::pair<dist_t, tableint>,
                             std::vector<std::pair<dist_t, tableint>>,
                             CompareByFirst>
@@ -1319,13 +1571,18 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     *data_ptr = static_cast<const char *>(data_point);
 
     if (curlevel) {
+      // Calculate the size needed based on extended neighbors
+      size_t level_size = use_extended_neighbors_ ? 
+          (maxM_extended_ * sizeof(tableint) + sizeof(linklistsizeint)) :
+          size_links_per_element_;
+      
       *reinterpret_cast<char **>((*linkLists_)[cur_c]) =
-          new char[size_links_per_element_ * curlevel + 1];
+          new char[level_size * curlevel + 1];
       if (*reinterpret_cast<char **>((*linkLists_)[cur_c]) == nullptr)
         throw std::runtime_error(
             "Not enough memory: addPoint failed to allocate linklist");
       memset(*reinterpret_cast<char **>((*linkLists_)[cur_c]), 0,
-             size_links_per_element_ * curlevel + 1);
+             level_size * curlevel + 1);
     }
 
     if ((signed)currObj != -1) {
@@ -1390,6 +1647,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     }
     return cur_c;
   }
+
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
       const void *query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr) const {
@@ -1548,6 +1806,71 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     }
     std::cout << "integrity ok, checked " << connections_checked
               << " connections\n";
+  }
+
+  // Extended neighbor specific helper functions
+  struct ExtendedNeighborStats {
+    size_t total_regular_neighbors = 0;
+    size_t total_extended_neighbors = 0;
+    size_t nodes_with_extended = 0;
+    size_t deleted_in_regular = 0;
+    size_t deleted_in_extended = 0;
+  };
+
+  ExtendedNeighborStats getExtendedNeighborStats() const {
+    ExtendedNeighborStats stats;
+    
+    if (!use_extended_neighbors_) return stats;
+    
+    for (size_t i = 0; i < cur_element_count_; i++) {
+      if (isMarkedDeleted(i)) continue;
+      
+      for (int level = 0; level <= element_levels_[i]; level++) {
+        linklistsizeint *ll = get_linklist_at_level(i, level);
+        size_t regular_count = getListCount(ll);
+        size_t total_count = getTotalListCount(ll);
+        tableint *data = (tableint *)(ll + 1);
+        
+        stats.total_regular_neighbors += regular_count;
+        
+        if (total_count > regular_count) {
+          stats.nodes_with_extended++;
+          stats.total_extended_neighbors += (total_count - regular_count);
+        }
+        
+        // Count deleted nodes
+        for (size_t j = 0; j < regular_count; j++) {
+          if (isMarkedDeleted(data[j])) stats.deleted_in_regular++;
+        }
+        for (size_t j = regular_count; j < total_count; j++) {
+          if (isMarkedDeleted(data[j])) stats.deleted_in_extended++;
+        }
+      }
+    }
+    
+    return stats;
+  }
+
+  void debugPrintNeighborList(tableint node_id, int level) const {
+    linklistsizeint *ll = get_linklist_at_level(node_id, level);
+    size_t regular_count = getListCount(ll);
+    size_t total_count = getTotalListCount(ll);
+    tableint *data = (tableint *)(ll + 1);
+    
+    std::cout << "Node " << node_id << " Level " << level << ":\n";
+    std::cout << "  Regular neighbors (" << regular_count << "): ";
+    for (size_t i = 0; i < regular_count && i < total_count; i++) {
+      std::cout << data[i] << (isMarkedDeleted(data[i]) ? "(D) " : " ");
+    }
+    std::cout << "\n";
+    
+    if (use_extended_neighbors_ && total_count > regular_count) {
+      std::cout << "  Extended neighbors (" << (total_count - regular_count) << "): ";
+      for (size_t i = regular_count; i < total_count; i++) {
+        std::cout << data[i] << (isMarkedDeleted(data[i]) ? "(D) " : " ");
+      }
+      std::cout << "\n";
+    }
   }
 };
 }  // namespace hnswlib
