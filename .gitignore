@@ -11,3 +11,6 @@ build-*
 build/
 .build-*
 debs/*.deb
+.git
+.devcontainer/
+.gitignore

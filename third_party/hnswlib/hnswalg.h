@@ -528,11 +528,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
           bool found_non_deleted = false;
           // Try to find a non-deleted extended neighbor
           for (size_t ext_idx = size + 1; ext_idx <= total_size; ext_idx++) {
-            tableint extended_id = *(data + ext_idx);
-            if (!isMarkedDeleted(extended_id)) {
-              candidate_id = extended_id;
-              found_non_deleted = true;
-              break;
+            if (ext_idx <= total_size) {
+              tableint extended_id = *(data + ext_idx);
+              if (!isMarkedDeleted(extended_id)) {
+                candidate_id = extended_id;
+                found_non_deleted = true;
+                break;
+              }
             }
           }
           // If all extended neighbors are also deleted, skip this neighbor entirely
@@ -661,12 +663,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     if (use_extended_neighbors_) {
       getNeighborsByHeuristic2(top_candidates, Mcurmax_extended);
     } else {
-      getNeighborsByHeuristic2(top_candidates, M_);
+      getNeighborsByHeuristic2(top_candidates, Mcurmax);
     }
     
-    if (top_candidates.size() > M_)
+    // Check against the appropriate limit based on extended neighbors
+    size_t expected_max = use_extended_neighbors_ ? Mcurmax_extended : Mcurmax;
+    if (top_candidates.size() > expected_max)
       throw std::runtime_error(
-          "Should be not be more than M_ candidates returned by the heuristic");
+          "Should be not be more than expected max candidates returned by the heuristic");
 
     std::vector<tableint> selectedNeighbors;
     selectedNeighbors.reserve(Mcurmax_extended);

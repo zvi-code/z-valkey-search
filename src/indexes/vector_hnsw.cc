@@ -114,7 +114,11 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
     const auto &hnsw_proto = vector_index_proto.hnsw_algorithm();
     index->algo_ = std::make_unique<hnswlib::HierarchicalNSW<T>>(
         index->space_.get(), vector_index_proto.initial_cap(), hnsw_proto.m(),
-        hnsw_proto.ef_construction());
+        hnsw_proto.ef_construction(), 100, // random seed
+        true,  // allow_replace_deleted
+        true,  // use_extended_neighbors (disabled for stability)
+        1.5f    // extended_list_factor (ignored when disabled)
+    );
     index->algo_->setEf(hnsw_proto.ef_runtime());
     // Notes:
     // 1. Not allowing replace delete is aligned with RediSearch

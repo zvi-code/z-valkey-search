@@ -1,7 +1,7 @@
 {
     "C_Cpp.default.compileCommands": "compile_commands.json",
-    "terminal.integrated.defaultProfile.linux": "bash",
-    "terminal.integrated.defaultProfile.osx": "bash",
+    "terminal.integrated.defaultProfile.linux": "zsh",
+    "terminal.integrated.defaultProfile.osx": "zsh",
     "clangd.path": "/usr/bin/clangd",
     "C_Cpp.codeAnalysis.runAutomatically": true,
     "editor.formatOnSave": false,
