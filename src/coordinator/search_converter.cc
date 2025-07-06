@@ -167,9 +167,9 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request) {
             parameters->filter_parse_results.filter_identifiers));
   }
   for (auto& return_parameter : request.return_parameters()) {
-    parameters->return_attributes.emplace_back(query::ReturnAttribute(
-        vmsdk::MakeUniqueRedisString(return_parameter.identifier()),
-        vmsdk::MakeUniqueRedisString(return_parameter.alias())));
+    parameters->return_attributes.emplace_back(query::ReturnAttribute{
+        .identifier = vmsdk::MakeUniqueRedisString(return_parameter.identifier()),
+        .attribute_alias = vmsdk::MakeUniqueRedisString(return_parameter.alias())});
   }
   return parameters;
 }
