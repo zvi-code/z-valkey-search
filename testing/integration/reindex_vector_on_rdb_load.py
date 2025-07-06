@@ -758,7 +758,7 @@ class ComprehensiveReIndexVectorTest:
                 
                 if num_docs and num_records:
                     if num_docs > num_records:
-                        print(f"✅ SKIP-VECTOR-RDB-LOAD appears to be working!")
+                        print(f"✅ REINDEX-VECTOR-RDB-LOAD appears to be working!")
                         print(f"   We have {num_docs} documents but only {num_records} vectors in index")
                         print(f"   This suggests vectors were NOT loaded from RDB")
                     elif num_docs == num_records == 1000:

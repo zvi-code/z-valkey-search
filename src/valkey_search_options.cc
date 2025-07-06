@@ -138,7 +138,7 @@ static auto use_coordinator =
         .Build();
 
 /// Should this instance reindex vector index RDB loading?
-static auto skip_vector_rdb_load =
+static auto reindex_vector_rdb_load =
     config::BooleanBuilder(kReIndexVectorRDBLoad, false)
         .WithFlags(REDISMODULE_CONFIG_HIDDEN)  // can only be set during
                                                // start-up
@@ -186,11 +186,11 @@ const vmsdk::config::Boolean& GetUseCoordinator() {
 }
 
 const vmsdk::config::Boolean& GetReIndexVectorRDBLoad() {
-  return dynamic_cast<const vmsdk::config::Boolean&>(*skip_vector_rdb_load);
+  return dynamic_cast<const vmsdk::config::Boolean&>(*reindex_vector_rdb_load);
 }
 
 vmsdk::config::Boolean& GetReIndexVectorRDBLoadMutable() {
-  return dynamic_cast<vmsdk::config::Boolean&>(*skip_vector_rdb_load);
+  return dynamic_cast<vmsdk::config::Boolean&>(*reindex_vector_rdb_load);
 }
 
 vmsdk::config::Enum& GetLogLevel() {
@@ -199,7 +199,7 @@ vmsdk::config::Enum& GetLogLevel() {
 
 absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
-  VMSDK_RETURN_IF_ERROR(skip_vector_rdb_load->SetValue(false));
+  VMSDK_RETURN_IF_ERROR(reindex_vector_rdb_load->SetValue(false));
   return absl::OkStatus();
 }
 
