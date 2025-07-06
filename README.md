@@ -48,6 +48,25 @@ valkey-search uses a **hybrid approach** with a query planner that selects the m
 - **Pre-filtering**
 - **Inline-filtering:** Filters results during the similarity search process.
 
+## ReIndex Vector Index RDB Loading
+
+valkey-search includes a feature to reindex vector index loading from RDB files during server startup, allowing for faster startup times and recovery from index corruption issues.
+
+### Configuration
+
+```sh
+CONFIG SET reindex-vector-rdb-load true
+```
+
+### Benefits
+
+- **Faster startup**: Skip loading large vector indexes from RDB
+- **Index consistency**: Recover from corrupted or inconsistent vector indexes
+- **Format upgrades**: Support HNSW parameter changes without migration
+- **Memory efficiency**: Reduce memory pressure during startup
+
+When enabled, vector indexes are rebuilt via the backfill process while non-vector indexes (TAG, NUMERIC) continue to work immediately. For detailed information, see [SKIP_VECTOR_RDB_LOAD.md](SKIP_VECTOR_RDB_LOAD.md).
+
 ## Build Instructions
 
 ### Install basic tools

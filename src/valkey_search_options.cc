@@ -44,6 +44,7 @@ constexpr absl::string_view kHNSWBlockSizeConfig{"hnsw-block-size"};
 constexpr absl::string_view kReaderThreadsConfig{"reader-threads"};
 constexpr absl::string_view kWriterThreadsConfig{"writer-threads"};
 constexpr absl::string_view kUseCoordinator{"use-coordinator"};
+constexpr absl::string_view kReIndexVectorRDBLoad{"reindex-vector-rdb-load"};
 constexpr absl::string_view kLogLevel{"log-level"};
 
 static const int64_t kDefaultThreadsCount = vmsdk::GetPhysicalCPUCoresCount();
@@ -136,6 +137,13 @@ static auto use_coordinator =
                                                // start-up
         .Build();
 
+/// Should this instance reindex vector index RDB loading?
+static auto skip_vector_rdb_load =
+    config::BooleanBuilder(kReIndexVectorRDBLoad, false)
+        .WithFlags(REDISMODULE_CONFIG_HIDDEN)  // can only be set during
+                                               // start-up
+        .Build();
+
 /// Control the modules log level verbosity
 static auto log_level =
     config::EnumBuilder(kLogLevel, static_cast<int>(LogLevel::kNotice),
@@ -177,12 +185,21 @@ const vmsdk::config::Boolean& GetUseCoordinator() {
   return dynamic_cast<const vmsdk::config::Boolean&>(*use_coordinator);
 }
 
+const vmsdk::config::Boolean& GetReIndexVectorRDBLoad() {
+  return dynamic_cast<const vmsdk::config::Boolean&>(*skip_vector_rdb_load);
+}
+
+vmsdk::config::Boolean& GetReIndexVectorRDBLoadMutable() {
+  return dynamic_cast<vmsdk::config::Boolean&>(*skip_vector_rdb_load);
+}
+
 vmsdk::config::Enum& GetLogLevel() {
   return dynamic_cast<vmsdk::config::Enum&>(*log_level);
 }
 
 absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
+  VMSDK_RETURN_IF_ERROR(skip_vector_rdb_load->SetValue(false));
   return absl::OkStatus();
 }
 
