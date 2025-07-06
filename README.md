@@ -61,7 +61,7 @@ CONFIG SET reindex-vector-rdb-load true
 ### Benefits
 
 - **Index consistency**: Recover from corrupted or inconsistent vector indexes
-- **Deleted Memory reclaim**: If index has many deleted vectors rebuilding the index during statup will free this memory
+- **Deleted Memory reclaim**: If index has many deleted vectors rebuilding the index during startup will free this memory
 
 When enabled, vector indexes are rebuilt via the backfill process while non-vector indexes (TAG, NUMERIC) continue to work immediately. 
 

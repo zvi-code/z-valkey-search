@@ -685,6 +685,7 @@ absl::string_view IndexSchema::GetStateForInfo() const {
           break;
         }
       }
+      // TODO: This is not accurate in case we have backfill started due to new index (config set only has impact if index is loaded from rdb).
       if (has_vector_index && options::GetReIndexVectorRDBLoad().GetValue()) {
         return "vector_index_rebuilding";
       } else {

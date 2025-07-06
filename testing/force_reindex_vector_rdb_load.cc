@@ -683,3 +683,7 @@ TEST_F(ReIndexVectorRDBLoadTest, FeatureFlagInteraction) {
   EXPECT_EQ(normal_schema->GetName(), "normal_feature_test");
   EXPECT_EQ(skip_schema->GetName(), "skip_feature_test");
 }
+
+}  // namespace
+
+}  // namespace valkey_search
