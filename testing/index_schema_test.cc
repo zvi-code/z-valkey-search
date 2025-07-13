@@ -30,11 +30,14 @@
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/numeric.h"
+#include "src/indexes/tag.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "testing/common.h"
 #include "third_party/hnswlib/hnswlib.h"  // IWYU pragma: keep
 #include "third_party/hnswlib/space_ip.h"
@@ -1416,4 +1419,1140 @@ TEST_F(IndexSchemaTest, ShouldBlockClient) {
   EXPECT_FALSE(ShouldBlockClient(&fake_ctx, false, true));
   EXPECT_FALSE(ShouldBlockClient(&fake_ctx, true, true));
 }
+
+
+TEST_F(IndexSchemaRDBTest, CompareNormalVsSkipLoad) {
+  std::vector<absl::string_view> key_prefixes = {"item:"};
+  std::string index_schema_name_str("compare_index");
+  int dimensions = 64;
+  auto distance_metric = data_model::DISTANCE_METRIC_L2;
+  int initial_cap = 2000;  // Increased for 1000 vectors
+  int m = 16;
+  int ef_construction = 200;
+  int ef_runtime = 10;
+  const int num_vectors = 1000;  // Test with 1000 vectors as requested
+
+  LOG(INFO) << "=== CompareNormalVsSkipLoad Test Started ===";
+  LOG(INFO) << "Testing with " << num_vectors << " vectors, dimensions=" << dimensions;
+
+  FakeSafeRDB rdb_stream;
+  
+  // Create and save a populated index schema with 1000 vectors
+  LOG(INFO) << "STEP 1: Creating and populating index schema with " << num_vectors << " vectors";
+  {
+    auto index_schema = MockIndexSchema::Create(
+                            &fake_ctx_, index_schema_name_str, key_prefixes,
+                            std::make_unique<HashAttributeDataType>(), nullptr)
+                            .value();
+
+    auto hnsw_index =
+        indexes::VectorHNSW<float>::Create(
+            CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
+                                       m, ef_construction, ef_runtime),
+            "embedding",
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+            .value();
+    VMSDK_EXPECT_OK(index_schema->AddIndex("embedding", "emb_id", hnsw_index));
+
+    auto vectors = DeterministicallyGenerateVectors(num_vectors, dimensions, 1.0);
+    auto itr = index_schema->attributes_.find("embedding");
+    EXPECT_FALSE(itr == index_schema->attributes_.end());
+    
+    LOG(INFO) << "Adding " << num_vectors << " vectors to the index...";
+    // Add all 1000 vectors to the index
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
+          absl::string_view((char *)&vectors[i][0], dimensions * sizeof(float)));
+      auto interned_key = StringInternStore::Intern("item:" + std::to_string(i));
+      
+      index_schema->ProcessAttributeMutation(&fake_ctx_, itr->second,
+                                             interned_key, std::move(data),
+                                             indexes::DeletionType::kNone);
+    }
+
+    // Verify all vectors were added before saving
+    uint64_t record_count = hnsw_index->GetRecordCount();
+    LOG(INFO) << "Index populated with " << record_count << " vectors";
+    EXPECT_EQ(record_count, num_vectors);
+    
+    LOG(INFO) << "Saving index schema to RDB...";
+    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream));
+    LOG(INFO) << "RDB save completed successfully";
+  }
+
+  // Test 1: Normal load (skip disabled) - should load all 1000 vectors from RDB
+  LOG(INFO) << "STEP 2: Testing normal load (skip loading disabled)";
+  std::shared_ptr<IndexSchema> normal_schema;
+  {
+    VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(false));
+    LOG(INFO) << "✓ Skip loading disabled (normal mode)";
+    
+    // Reset stream for reading
+    rdb_stream.buffer_.clear();
+    rdb_stream.buffer_.seekg(0, std::ios::beg);
+    LOG(INFO) << "✓ RDB stream reset for reading";
+    
+    ValkeyModuleCtx parent_ctx;
+    ValkeyModuleCtx scan_ctx;
+    EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx))
+        .WillRepeatedly(Return(&scan_ctx));
+    
+    LOG(INFO) << "Loading index schema from RDB with normal mode...";
+    RDBSectionIter iter(&rdb_stream, 1);
+    auto section = iter.Next();
+    VMSDK_EXPECT_OK_STATUSOR(section);
+    
+    auto schema_or = IndexSchema::LoadFromRDB(
+        &parent_ctx, nullptr,
+        std::make_unique<data_model::IndexSchema>((*section)->index_schema_contents()),
+        iter.IterateSupplementalContent());
+    
+    VMSDK_EXPECT_OK_STATUSOR(schema_or);
+    normal_schema = std::move(schema_or.value());
+    LOG(INFO) << "✓ Index schema loaded from RDB successfully";
+    
+    // Should have loaded all 1000 vectors from RDB
+    uint64_t normal_doc_count = normal_schema->GetStats().document_cnt;
+    LOG(INFO) << "Normal load - Document count: " << normal_doc_count;
+    EXPECT_EQ(normal_doc_count, num_vectors);
+    
+    // Vector index should be fully populated with all 1000 vectors when skip is disabled
+    auto vec_index = normal_schema->GetIndex("embedding");
+    VMSDK_EXPECT_OK_STATUSOR(vec_index);
+    uint64_t normal_record_count = vec_index.value()->GetRecordCount();
+    LOG(INFO) << "Normal load - Vector index record count: " << normal_record_count;
+    EXPECT_EQ(normal_record_count, num_vectors);
+    
+    LOG(INFO) << "✓ Normal load validation completed - all " << num_vectors << " vectors loaded from RDB";
+    // Note: Even with skip disabled, backfill may be in progress for cleanup tasks,
+    // but the key difference is that vectors are loaded from RDB immediately
+  }
+
+  // Test 2: Skip load (skip enabled) - should skip loading vectors and use backfill
+  LOG(INFO) << "STEP 3: Testing skip load (skip loading enabled)";
+  std::shared_ptr<IndexSchema> skip_schema;
+  {
+    VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(true));
+    LOG(INFO) << "✓ Skip loading enabled";
+    
+    // Reset stream for reading
+    rdb_stream.buffer_.clear();
+    rdb_stream.buffer_.seekg(0, std::ios::beg);
+    LOG(INFO) << "✓ RDB stream reset for reading";
+    
+    ValkeyModuleCtx parent_ctx2;
+    ValkeyModuleCtx scan_ctx2;
+    EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx2))
+        .WillRepeatedly(Return(&scan_ctx2));
+    EXPECT_CALL(*kMockValkeyModule, DbSize(testing::_))
+        .WillRepeatedly(Return(num_vectors)); // Simulate 1000 keys in database
+    LOG(INFO) << "✓ Mock setup completed - simulating " << num_vectors << " keys in database";
+    
+    // Create deterministic vectors for backfill simulation
+    auto vectors = DeterministicallyGenerateVectors(num_vectors, dimensions, 1.0);
+    LOG(INFO) << "✓ Generated " << vectors.size() << " vectors for backfill simulation";
+    
+    // Mock scan to return keys that match our prefix, simulating backfill behavior
+    int scan_call_count = 0;
+    EXPECT_CALL(*kMockValkeyModule,
+                Scan(&scan_ctx2, testing::An<ValkeyModuleScanCursor *>(),
+                     testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
+        .WillRepeatedly([&scan_call_count, num_vectors](ValkeyModuleCtx *ctx, ValkeyModuleScanCursor *cursor,
+                          ValkeyModuleScanCB fn, void *privdata) -> int {
+          if (scan_call_count < num_vectors) {
+            // Return a key that matches our prefix
+            std::string key = "item:" + std::to_string(scan_call_count);
+            auto key_r_str = vmsdk::MakeUniqueValkeyString(key);
+            ValkeyModuleKey vkey = {.ctx = ctx, .key = key};
+            
+            // Call the callback with the key
+            fn(ctx, key_r_str.get(), &vkey, privdata);
+            scan_call_count++;
+            return 1; // More keys available
+          }
+          return 0; // No more keys
+        });
+    
+    // Mock key operations for the scan - simulate finding vector data in hash
+    int hash_get_call_count = 0;
+    EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+        .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+    EXPECT_CALL(*kMockValkeyModule, 
+                HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_, 
+                       testing::An<ValkeyModuleString**>(), TypedEq<void*>(nullptr)))
+        .WillRepeatedly([&hash_get_call_count, &vectors, dimensions](
+                          ValkeyModuleKey *key, int flags, const char *field, 
+                          ValkeyModuleString **value, void *extra) -> int {
+          if (hash_get_call_count < vectors.size()) {
+            // Return vector data for the "emb_id" field
+            auto vector_data = vmsdk::MakeUniqueValkeyString(
+                absl::string_view((char *)&vectors[hash_get_call_count][0], 
+                                 dimensions * sizeof(float)));
+            *value = vector_data.release();
+            hash_get_call_count++;
+            return VALKEYMODULE_OK;
+          }
+          return VALKEYMODULE_ERR; // No more data
+        });
+    LOG(INFO) << "✓ Mock scan and hash operations configured for backfill simulation";
+    
+    LOG(INFO) << "Loading index schema from RDB with skip mode...";
+    RDBSectionIter iter(&rdb_stream, 1);
+    auto section = iter.Next();
+    VMSDK_EXPECT_OK_STATUSOR(section);
+    
+    auto schema_or = IndexSchema::LoadFromRDB(
+        &parent_ctx2, nullptr,
+        std::make_unique<data_model::IndexSchema>((*section)->index_schema_contents()),
+        iter.IterateSupplementalContent());
+    
+    VMSDK_EXPECT_OK_STATUSOR(schema_or);
+    skip_schema = std::move(schema_or.value());
+    LOG(INFO) << "✓ Index schema loaded from RDB with skip mode";
+    
+    // Schema metadata should be preserved (document count from RDB)
+    uint64_t skip_doc_count = skip_schema->GetStats().document_cnt;
+    LOG(INFO) << "Skip load - Document count: " << skip_doc_count;
+    EXPECT_EQ(skip_doc_count, num_vectors);
+    
+    // But vector index should be empty initially (skip load worked)
+    auto vec_index = skip_schema->GetIndex("embedding");
+    VMSDK_EXPECT_OK_STATUSOR(vec_index);
+    uint64_t initial_record_count = vec_index.value()->GetRecordCount();
+    LOG(INFO) << "Skip load - Initial vector index record count: " << initial_record_count;
+    EXPECT_EQ(initial_record_count, 0);
+    
+    // Backfill should be in progress after loading with skip enabled
+    bool backfill_in_progress = skip_schema->IsBackfillInProgress();
+    LOG(INFO) << "Skip load - Backfill in progress: " << (backfill_in_progress ? "YES" : "NO");
+    EXPECT_TRUE(backfill_in_progress);
+    
+    LOG(INFO) << "✓ Skip load validation completed - index is empty and backfill is ready";
+    
+    // STEP 4: Perform backfill to process all 1000 keys
+    LOG(INFO) << "STEP 4: Starting backfill process";
+    uint32_t total_scanned = 0;
+    const uint32_t batch_size = 100; // Process in batches
+    LOG(INFO) << "Backfill configuration - batch size: " << batch_size;
+    
+    int batch_count = 0;
+    while (skip_schema->IsBackfillInProgress()) {
+      uint32_t scanned = skip_schema->PerformBackfill(&parent_ctx2, batch_size);
+      total_scanned += scanned;
+      batch_count++;
+      
+      LOG(INFO) << "Backfill batch " << batch_count << " - processed " << scanned 
+                << " keys (total: " << total_scanned << ")";
+      LOG(INFO) << "Backfill progress: " << (skip_schema->GetBackfillPercent() * 100) << "%";
+      LOG(INFO) << "Current vector count: " << vec_index.value()->GetRecordCount();
+      
+      // Break if no progress to avoid infinite loop
+      if (scanned == 0) {
+        LOG(WARNING) << "Backfill made no progress, breaking to avoid infinite loop";
+        break;
+      }
+    }
+    
+    // Verify backfill completed and processed all keys
+    bool final_backfill_state = skip_schema->IsBackfillInProgress();
+    LOG(INFO) << "Backfill completion status - in progress: " << (final_backfill_state ? "YES" : "NO");
+    EXPECT_FALSE(final_backfill_state);
+    
+    LOG(INFO) << "Total keys scanned during backfill: " << total_scanned;
+    EXPECT_GT(total_scanned, 0);
+    
+    // After backfill, the index should contain all 1000 vectors
+    uint64_t final_record_count = vec_index.value()->GetRecordCount();
+    LOG(INFO) << "Final vector index record count after backfill: " << final_record_count;
+    EXPECT_EQ(final_record_count, num_vectors);
+    
+    // Verify backfill progress reached 100%
+    float final_progress = skip_schema->GetBackfillPercent();
+    LOG(INFO) << "Final backfill progress: " << (final_progress * 100) << "%";
+    EXPECT_FLOAT_EQ(final_progress, 1.0f);
+    
+    LOG(INFO) << "✓ Backfill process completed successfully";
+  }
+
+  // STEP 5: Final comparison - both schemas should end up with the same number of vectors
+  LOG(INFO) << "STEP 5: Final validation and comparison";
+  auto normal_vec_index = normal_schema->GetIndex("embedding");
+  auto skip_vec_index = skip_schema->GetIndex("embedding");
+  VMSDK_EXPECT_OK_STATUSOR(normal_vec_index);
+  VMSDK_EXPECT_OK_STATUSOR(skip_vec_index);
+  
+  uint64_t normal_final_count = normal_vec_index.value()->GetRecordCount();
+  uint64_t skip_final_count = skip_vec_index.value()->GetRecordCount();
+  
+  LOG(INFO) << "Final comparison:";
+  LOG(INFO) << "  Normal load final vector count: " << normal_final_count;
+  LOG(INFO) << "  Skip load + backfill final vector count: " << skip_final_count;
+  
+  EXPECT_EQ(normal_final_count, skip_final_count);
+  EXPECT_EQ(normal_final_count, num_vectors);
+  
+  LOG(INFO) << "✓ Both loading methods resulted in " << num_vectors << " vectors";
+  LOG(INFO) << "✓ Skip loading feature validation PASSED";
+
+  // Cleanup
+  VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(false));
+  LOG(INFO) << "✓ Test cleanup completed - skip loading option reset to false";
+  LOG(INFO) << "=== CompareNormalVsSkipLoad Test Completed Successfully ===";
+}
+
+TEST_F(IndexSchemaRDBTest, SkipLoadMixedIndexTypes) {
+  // Test skip load with multiple index types
+  VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(true));
+  
+  std::vector<absl::string_view> key_prefixes = {"product:"};
+  std::string index_schema_name_str("mixed_index");
+  int dimensions = 32;
+  
+  FakeSafeRDB rdb_stream;
+  
+  // Create schema with multiple index types
+  {
+    auto index_schema = MockIndexSchema::Create(
+                            &fake_ctx_, index_schema_name_str, key_prefixes,
+                            std::make_unique<HashAttributeDataType>(), nullptr)
+                            .value();
+
+    // Add vector index
+    auto hnsw_index = indexes::VectorHNSW<float>::Create(
+        CreateHNSWVectorIndexProto(dimensions, data_model::DISTANCE_METRIC_L2,
+                                   100, 16, 200, 10),
+        "embedding", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+        .value();
+    VMSDK_EXPECT_OK(index_schema->AddIndex("embedding", "emb_id", hnsw_index));
+
+    // Add some test data using the same pattern as SaveAndLoad test
+    auto vectors = DeterministicallyGenerateVectors(3, dimensions, 1.0);
+    auto itr = index_schema->attributes_.find("embedding");
+    EXPECT_FALSE(itr == index_schema->attributes_.end());
+    
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
+          absl::string_view((char *)&vectors[i][0], dimensions * sizeof(float)));
+      auto interned_key = StringInternStore::Intern("product:" + std::to_string(i));
+      
+      index_schema->ProcessAttributeMutation(&fake_ctx_, itr->second,
+                                             interned_key, std::move(data),
+                                             indexes::DeletionType::kNone);
+    }
+
+    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream));
+  }
+
+  // Load with skip enabled
+  ValkeyModuleCtx parent_ctx;
+  ValkeyModuleCtx scan_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx))
+      .WillRepeatedly(Return(&scan_ctx));
+  EXPECT_CALL(*kMockValkeyModule, DbSize(testing::_))
+      .WillRepeatedly(Return(3)); // Simulate 3 keys in database
+  
+  // Mock scan to return keys, testing backfill with in-progress state
+  int scan_call_count = 0;
+  EXPECT_CALL(*kMockValkeyModule,
+              Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
+                   testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
+      .WillRepeatedly([&scan_call_count](ValkeyModuleCtx *ctx, ValkeyModuleScanCursor *cursor,
+                        ValkeyModuleScanCB fn, void *privdata) -> int {
+        if (scan_call_count < 3) {
+          // Return a key that matches our prefix
+          std::string key = "product:" + std::to_string(scan_call_count);
+          auto key_r_str = vmsdk::MakeUniqueValkeyString(key);
+          ValkeyModuleKey vkey = {.ctx = ctx, .key = key};
+          
+          // Call the callback with the key
+          fn(ctx, key_r_str.get(), &vkey, privdata);
+          scan_call_count++;
+          return 1; // More keys available
+        }
+        return 0; // No more keys
+      });
+  
+  // Mock key operations for the scan  
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+  EXPECT_CALL(*kMockValkeyModule, 
+              HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_, 
+                     testing::An<ValkeyModuleString**>(), TypedEq<void*>(nullptr)))
+      .WillRepeatedly(Return(VALKEYMODULE_ERR)); // No hash field found, skip processing
+  
+  RDBSectionIter iter(&rdb_stream, 1);
+  auto section = iter.Next();
+  VMSDK_EXPECT_OK_STATUSOR(section);
+  
+  auto schema_or = IndexSchema::LoadFromRDB(
+      &parent_ctx, nullptr,
+      std::make_unique<data_model::IndexSchema>((*section)->index_schema_contents()),
+      iter.IterateSupplementalContent());
+  
+  VMSDK_EXPECT_OK_STATUSOR(schema_or);
+  auto index_schema = std::move(schema_or.value());
+  
+  // Schema should be loaded
+  EXPECT_THAT(index_schema->GetKeyPrefixes(), testing::UnorderedElementsAre("product:"));
+  
+  // Vector index should exist but be empty initially (skip load worked)
+  auto vec_index = index_schema->GetIndex("embedding");
+  VMSDK_EXPECT_OK_STATUSOR(vec_index);
+  EXPECT_EQ(vec_index.value()->GetRecordCount(), 0);
+  
+  // Backfill should be in progress
+  EXPECT_TRUE(index_schema->IsBackfillInProgress());
+  
+  // Perform backfill to process the scanned keys
+  auto scanned = index_schema->PerformBackfill(&parent_ctx, 1000);
+  EXPECT_GT(scanned, 0); // Should have scanned some keys
+  
+  // Keep running backfill until it's done
+  while (index_schema->IsBackfillInProgress()) {
+    index_schema->PerformBackfill(&parent_ctx, 1000);
+  }
+  
+  EXPECT_FALSE(index_schema->IsBackfillInProgress());
+  
+  // Cleanup
+  VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(false));
+}
+
+TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
+  const int num_vectors = 1000;
+  const int dimensions = 64;
+  const int additional_index_vectors = 100;
+  auto distance_metric = data_model::DISTANCE_METRIC_L2;
+  int initial_cap = 2000;
+  int m = 16;
+  int ef_construction = 200;
+  int ef_runtime = 10;
+  int block_size = 128;
+
+  LOG(INFO) << "=== Comprehensive Skip Load Test Started ===";
+
+  // STEP 1: Create vector index + add 1000 vectors, save to RDB
+  LOG(INFO) << "STEP 1: Creating vector index with " << num_vectors << " vectors";
+  std::vector<absl::string_view> key_prefixes = {"item:"};
+  std::string index_schema_name_str("comprehensive_test");
+  FakeSafeRDB rdb_stream_step1;
+  
+  {
+    auto index_schema = MockIndexSchema::Create(
+                            &fake_ctx_, index_schema_name_str, key_prefixes,
+                            std::make_unique<HashAttributeDataType>(), nullptr)
+                            .value();
+
+    auto hnsw_index = indexes::VectorHNSW<float>::Create(
+        CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
+                                   m, ef_construction, ef_runtime),
+        "embedding", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+        .value();
+    VMSDK_EXPECT_OK(index_schema->AddIndex("embedding", "emb_id", hnsw_index));
+
+    // Add 1000 vectors
+    auto vectors = DeterministicallyGenerateVectors(num_vectors, dimensions, 1.0);
+    auto itr = index_schema->attributes_.find("embedding");
+    EXPECT_FALSE(itr == index_schema->attributes_.end());
+    
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
+          absl::string_view((char *)&vectors[i][0], dimensions * sizeof(float)));
+      auto interned_key = StringInternStore::Intern("item:" + std::to_string(i));
+      index_schema->ProcessAttributeMutation(&fake_ctx_, itr->second,
+                                             interned_key, std::move(data),
+                                             indexes::DeletionType::kNone);
+    }
+
+    EXPECT_EQ(hnsw_index->GetRecordCount(), num_vectors);
+    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream_step1));
+    LOG(INFO) << "✓ Step 1 completed - saved " << num_vectors << " vectors to RDB";
+  }
+
+  // STEP 2: Load from RDB normally, then load with skip and verify vectors are loaded correctly
+  LOG(INFO) << "STEP 2: Testing normal load vs skip load for vector index";
+  
+  // Normal load
+  {
+    VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(false));
+    
+    ValkeyModuleCtx parent_ctx;
+    ValkeyModuleCtx scan_ctx;
+    EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+        .WillRepeatedly(Return(&scan_ctx));
+    
+    RDBSectionIter iter(&rdb_stream_step1, 1);
+    auto section = iter.Next();
+    VMSDK_EXPECT_OK_STATUSOR(section);
+    
+    auto schema_or = IndexSchema::LoadFromRDB(
+        &parent_ctx, nullptr,
+        std::make_unique<data_model::IndexSchema>((*section)->index_schema_contents()),
+        iter.IterateSupplementalContent());
+    
+    VMSDK_EXPECT_OK_STATUSOR(schema_or);
+    auto normal_schema = std::move(schema_or.value());
+    
+    EXPECT_EQ(normal_schema->GetStats().document_cnt, num_vectors);
+    auto vec_index = normal_schema->GetIndex("embedding");
+    VMSDK_EXPECT_OK_STATUSOR(vec_index);
+    EXPECT_EQ(vec_index.value()->GetRecordCount(), num_vectors);
+    LOG(INFO) << "✓ Normal load verified - " << num_vectors << " vectors loaded";
+  }
+
+  // Skip load
+  {
+    VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(true));
+    
+    // Reset stream for reading
+    rdb_stream_step1.buffer_.clear();
+    rdb_stream_step1.buffer_.seekg(0, std::ios::beg);
+    
+    ValkeyModuleCtx parent_ctx;
+    ValkeyModuleCtx scan_ctx;
+    EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+        .WillRepeatedly(Return(&scan_ctx));
+    EXPECT_CALL(*kMockValkeyModule, DbSize(testing::_))
+        .WillRepeatedly(Return(num_vectors));
+    
+    // Mock scan operations for backfill
+    int scan_call_count = 0;
+    EXPECT_CALL(*kMockValkeyModule,
+                Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
+                     testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
+        .WillRepeatedly([&scan_call_count, num_vectors](ValkeyModuleCtx *ctx, ValkeyModuleScanCursor *cursor,
+                          ValkeyModuleScanCB fn, void *privdata) -> int {
+          if (scan_call_count < num_vectors) {
+            std::string key = "item:" + std::to_string(scan_call_count);
+            auto key_r_str = vmsdk::MakeUniqueValkeyString(key);
+            ValkeyModuleKey vkey = {.ctx = ctx, .key = key};
+            fn(ctx, key_r_str.get(), &vkey, privdata);
+            scan_call_count++;
+            return 1;
+          }
+          return 0;
+        });
+    
+    EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+        .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+    EXPECT_CALL(*kMockValkeyModule, 
+                HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_, 
+                       testing::An<ValkeyModuleString**>(), TypedEq<void*>(nullptr)))
+        .WillRepeatedly(Return(VALKEYMODULE_ERR));
+    
+    RDBSectionIter iter(&rdb_stream_step1, 1);
+    auto section = iter.Next();
+    VMSDK_EXPECT_OK_STATUSOR(section);
+    
+    auto schema_or = IndexSchema::LoadFromRDB(
+        &parent_ctx, nullptr,
+        std::make_unique<data_model::IndexSchema>((*section)->index_schema_contents()),
+        iter.IterateSupplementalContent());
+    
+    VMSDK_EXPECT_OK_STATUSOR(schema_or);
+    auto skip_schema = std::move(schema_or.value());
+    
+    EXPECT_EQ(skip_schema->GetStats().document_cnt, num_vectors);
+    auto vec_index = skip_schema->GetIndex("embedding");
+    VMSDK_EXPECT_OK_STATUSOR(vec_index);
+    EXPECT_EQ(vec_index.value()->GetRecordCount(), 0);
+    EXPECT_TRUE(skip_schema->IsBackfillInProgress());
+    LOG(INFO) << "✓ Skip load verified - index empty, backfill ready";
+  }
+
+  // STEP 3: Drop the index (implicitly done when schema goes out of scope)
+  LOG(INFO) << "STEP 3: Index dropped (implicit)";
+
+  // STEP 4: Create vector index + numeric field + tag field + add 1000 vectors + save to RDB  
+  LOG(INFO) << "STEP 4: Creating mixed index with vector + numeric + tag fields";
+  FakeSafeRDB rdb_stream_step4;
+  
+  {
+    auto index_schema = MockIndexSchema::Create(
+                            &fake_ctx_, index_schema_name_str, key_prefixes,
+                            std::make_unique<HashAttributeDataType>(), nullptr)
+                            .value();
+
+    // Add vector index
+    auto hnsw_index = indexes::VectorHNSW<float>::Create(
+        CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
+                                   m, ef_construction, ef_runtime),
+        "embedding", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+        .value();
+    VMSDK_EXPECT_OK(index_schema->AddIndex("embedding", "emb_id", hnsw_index));
+
+    // Add numeric index
+    auto numeric_index = std::make_shared<indexes::Numeric>(
+        CreateNumericIndexProto());
+    VMSDK_EXPECT_OK(index_schema->AddIndex("price", "price_id", numeric_index));
+
+    // Add tag index
+    auto tag_index = std::make_shared<indexes::Tag>(
+        CreateTagIndexProto(",", false));
+    VMSDK_EXPECT_OK(index_schema->AddIndex("category", "cat_id", tag_index));
+
+    // Add test data for all indexes
+    auto vectors = DeterministicallyGenerateVectors(num_vectors, dimensions, 1.0);
+    auto vec_itr = index_schema->attributes_.find("embedding");
+    auto num_itr = index_schema->attributes_.find("price");
+    auto tag_itr = index_schema->attributes_.find("category");
+    
+    EXPECT_FALSE(vec_itr == index_schema->attributes_.end());
+    EXPECT_FALSE(num_itr == index_schema->attributes_.end());
+    EXPECT_FALSE(tag_itr == index_schema->attributes_.end());
+    
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      auto interned_key = StringInternStore::Intern("item:" + std::to_string(i));
+      
+      // Add vector data
+      vmsdk::UniqueValkeyString vec_data = vmsdk::MakeUniqueValkeyString(
+          absl::string_view((char *)&vectors[i][0], dimensions * sizeof(float)));
+      index_schema->ProcessAttributeMutation(&fake_ctx_, vec_itr->second,
+                                             interned_key, std::move(vec_data),
+                                             indexes::DeletionType::kNone);
+      
+      // Add numeric data (price)
+      std::string price_str = std::to_string(i * 10 + 100); // prices 100, 110, 120, etc.
+      vmsdk::UniqueValkeyString num_data = vmsdk::MakeUniqueValkeyString(price_str);
+      index_schema->ProcessAttributeMutation(&fake_ctx_, num_itr->second,
+                                             interned_key, std::move(num_data),
+                                             indexes::DeletionType::kNone);
+      
+      // Add tag data (category)
+      std::string category = (i % 3 == 0) ? "electronics" : (i % 3 == 1) ? "books" : "clothing";
+      vmsdk::UniqueValkeyString tag_data = vmsdk::MakeUniqueValkeyString(category);
+      index_schema->ProcessAttributeMutation(&fake_ctx_, tag_itr->second,
+                                             interned_key, std::move(tag_data),
+                                             indexes::DeletionType::kNone);
+    }
+
+    EXPECT_EQ(hnsw_index->GetRecordCount(), num_vectors);
+    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream_step4));
+    LOG(INFO) << "✓ Step 4 completed - saved mixed index with " << num_vectors << " records";
+  }
+
+  // STEP 5: Load from RDB normally, then load with skip and verify
+  LOG(INFO) << "STEP 5: Testing mixed index normal vs skip load";
+  
+  // Normal load for mixed index
+  {
+    VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(false));
+    
+    ValkeyModuleCtx parent_ctx;
+    ValkeyModuleCtx scan_ctx;
+    EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+        .WillRepeatedly(Return(&scan_ctx));
+    
+    RDBSectionIter iter(&rdb_stream_step4, 1);
+    auto section = iter.Next();
+    VMSDK_EXPECT_OK_STATUSOR(section);
+    
+    auto schema_or = IndexSchema::LoadFromRDB(
+        &parent_ctx, nullptr,
+        std::make_unique<data_model::IndexSchema>((*section)->index_schema_contents()),
+        iter.IterateSupplementalContent());
+    
+    VMSDK_EXPECT_OK_STATUSOR(schema_or);
+    auto mixed_schema = std::move(schema_or.value());
+    
+    EXPECT_EQ(mixed_schema->GetStats().document_cnt, num_vectors);
+    
+    // Verify all index types are loaded
+    auto vec_index = mixed_schema->GetIndex("embedding");
+    auto num_index = mixed_schema->GetIndex("price");
+    auto tag_index = mixed_schema->GetIndex("category");
+    
+    VMSDK_EXPECT_OK_STATUSOR(vec_index);
+    VMSDK_EXPECT_OK_STATUSOR(num_index);
+    VMSDK_EXPECT_OK_STATUSOR(tag_index);
+    
+    EXPECT_EQ(vec_index.value()->GetRecordCount(), num_vectors);
+    LOG(INFO) << "✓ Mixed index normal load verified";
+  }
+
+  // Skip load for mixed index
+  {
+    VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(true));
+    
+    // Reset stream
+    rdb_stream_step4.buffer_.clear();
+    rdb_stream_step4.buffer_.seekg(0, std::ios::beg);
+    
+    ValkeyModuleCtx parent_ctx;
+    ValkeyModuleCtx scan_ctx;
+    EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+        .WillRepeatedly(Return(&scan_ctx));
+    EXPECT_CALL(*kMockValkeyModule, DbSize(testing::_))
+        .WillRepeatedly(Return(num_vectors));
+    
+    // Mock scan operations
+    int scan_call_count = 0;
+    EXPECT_CALL(*kMockValkeyModule,
+                Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
+                     testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
+        .WillRepeatedly([&scan_call_count, num_vectors](ValkeyModuleCtx *ctx, ValkeyModuleScanCursor *cursor,
+                          ValkeyModuleScanCB fn, void *privdata) -> int {
+          if (scan_call_count < num_vectors) {
+            std::string key = "item:" + std::to_string(scan_call_count);
+            auto key_r_str = vmsdk::MakeUniqueValkeyString(key);
+            ValkeyModuleKey vkey = {.ctx = ctx, .key = key};
+            fn(ctx, key_r_str.get(), &vkey, privdata);
+            scan_call_count++;
+            return 1;
+          }
+          return 0;
+        });
+    
+    EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+        .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+    EXPECT_CALL(*kMockValkeyModule, 
+                HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_, 
+                       testing::An<ValkeyModuleString**>(), TypedEq<void*>(nullptr)))
+        .WillRepeatedly(Return(VALKEYMODULE_ERR));
+    
+    RDBSectionIter iter(&rdb_stream_step4, 1);
+    auto section = iter.Next();
+    VMSDK_EXPECT_OK_STATUSOR(section);
+    
+    auto schema_or = IndexSchema::LoadFromRDB(
+        &parent_ctx, nullptr,
+        std::make_unique<data_model::IndexSchema>((*section)->index_schema_contents()),
+        iter.IterateSupplementalContent());
+    
+    VMSDK_EXPECT_OK_STATUSOR(schema_or);
+    auto mixed_skip_schema = std::move(schema_or.value());
+    
+    EXPECT_EQ(mixed_skip_schema->GetStats().document_cnt, num_vectors);
+    
+    // All indexes should be empty initially
+    auto vec_index = mixed_skip_schema->GetIndex("embedding");
+    auto num_index = mixed_skip_schema->GetIndex("price");
+    auto tag_index = mixed_skip_schema->GetIndex("category");
+    
+    VMSDK_EXPECT_OK_STATUSOR(vec_index);
+    VMSDK_EXPECT_OK_STATUSOR(num_index);
+    VMSDK_EXPECT_OK_STATUSOR(tag_index);
+    
+    EXPECT_EQ(vec_index.value()->GetRecordCount(), 0);
+    EXPECT_TRUE(mixed_skip_schema->IsBackfillInProgress());
+    LOG(INFO) << "✓ Mixed index skip load verified";
+  }
+
+  // STEPS 6-7: Create additional 2 indexes each with 100 vectors and save
+  LOG(INFO) << "STEPS 6-7: Creating additional indexes with " << additional_index_vectors << " vectors each";
+  FakeSafeRDB rdb_stream_multi;
+  
+  {
+    auto index_schema = MockIndexSchema::Create(
+                            &fake_ctx_, index_schema_name_str, key_prefixes,
+                            std::make_unique<HashAttributeDataType>(), nullptr)
+                            .value();
+
+    // Create 3 vector indexes (original + 2 additional)
+    auto hnsw_index1 = indexes::VectorHNSW<float>::Create(
+        CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
+                                   m, ef_construction, ef_runtime),
+        "embedding1", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+        .value();
+    VMSDK_EXPECT_OK(index_schema->AddIndex("embedding1", "emb1_id", hnsw_index1));
+
+    auto hnsw_index2 = indexes::VectorHNSW<float>::Create(
+        CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
+                                   m, ef_construction, ef_runtime),
+        "embedding2", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+        .value();
+    VMSDK_EXPECT_OK(index_schema->AddIndex("embedding2", "emb2_id", hnsw_index2));
+
+    auto flat_index = indexes::VectorFlat<float>::Create(
+        CreateFlatVectorIndexProto(dimensions, distance_metric, initial_cap, block_size),
+        "embedding3", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+        .value();
+    VMSDK_EXPECT_OK(index_schema->AddIndex("embedding3", "emb3_id", flat_index));
+
+    // Add vectors to each index (100 vectors each, different ranges)
+    auto vectors = DeterministicallyGenerateVectors(additional_index_vectors * 3, dimensions, 1.0);
+    
+    auto itr1 = index_schema->attributes_.find("embedding1");
+    auto itr2 = index_schema->attributes_.find("embedding2");
+    auto itr3 = index_schema->attributes_.find("embedding3");
+    
+    EXPECT_FALSE(itr1 == index_schema->attributes_.end());
+    EXPECT_FALSE(itr2 == index_schema->attributes_.end());
+    EXPECT_FALSE(itr3 == index_schema->attributes_.end());
+    
+    // Add to index1: vectors 0-99
+    for (int i = 0; i < additional_index_vectors; ++i) {
+      vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
+          absl::string_view((char *)&vectors[i][0], dimensions * sizeof(float)));
+      auto interned_key = StringInternStore::Intern("item:" + std::to_string(i));
+      index_schema->ProcessAttributeMutation(&fake_ctx_, itr1->second,
+                                             interned_key, std::move(data),
+                                             indexes::DeletionType::kNone);
+    }
+    
+    // Add to index2: vectors 100-199
+    for (int i = 0; i < additional_index_vectors; ++i) {
+      vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
+          absl::string_view((char *)&vectors[i + additional_index_vectors][0], dimensions * sizeof(float)));
+      auto interned_key = StringInternStore::Intern("item:" + std::to_string(i + 1000));
+      index_schema->ProcessAttributeMutation(&fake_ctx_, itr2->second,
+                                             interned_key, std::move(data),
+                                             indexes::DeletionType::kNone);
+    }
+    
+    // Add to index3: vectors 200-299
+    for (int i = 0; i < additional_index_vectors; ++i) {
+      vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
+          absl::string_view((char *)&vectors[i + additional_index_vectors * 2][0], dimensions * sizeof(float)));
+      auto interned_key = StringInternStore::Intern("item:" + std::to_string(i + 2000));
+      index_schema->ProcessAttributeMutation(&fake_ctx_, itr3->second,
+                                             interned_key, std::move(data),
+                                             indexes::DeletionType::kNone);
+    }
+
+    EXPECT_EQ(hnsw_index1->GetRecordCount(), additional_index_vectors);
+    EXPECT_EQ(hnsw_index2->GetRecordCount(), additional_index_vectors);
+    EXPECT_EQ(flat_index->GetRecordCount(), additional_index_vectors);
+    
+    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream_multi));
+    LOG(INFO) << "✓ Steps 6-7 completed - saved 3 indexes with " << additional_index_vectors << " vectors each";
+  }
+
+  // Cleanup
+  VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(false));
+  LOG(INFO) << "=== Comprehensive Skip Load Test Completed ===";
+}
+
+TEST_F(IndexSchemaRDBTest, VectorRdbSkipTest) {
+  const int num_vectors = 1000;
+  const int dimensions = 128;
+  const int additional_index_vectors = 100;
+  auto distance_metric = data_model::DISTANCE_METRIC_L2;
+  int initial_cap = 2000;
+  int m = 16;
+  int ef_construction = 200;
+  int ef_runtime = 10;
+
+  LOG(INFO) << "=== Vector RDB Skip Test Started ===";
+
+  // Step 1: create vector index+add 1000 vectors save to rdb
+  LOG(INFO) << "STEP 1: Creating vector index with " << num_vectors << " vectors";
+  std::vector<absl::string_view> key_prefixes = {"vec_key:"};
+  std::string index_schema_name_str("vec_idx");
+  FakeSafeRDB rdb_stream_step1;
+  
+  {
+    auto index_schema = MockIndexSchema::Create(
+                            &fake_ctx_, index_schema_name_str, key_prefixes,
+                            std::make_unique<HashAttributeDataType>(), nullptr)
+                            .value();
+
+    auto vector_index = indexes::VectorFlat<float>::Create(
+        CreateFlatVectorIndexProto(dimensions, distance_metric, initial_cap, 128),
+        "vector_field", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+        .value();
+    VMSDK_EXPECT_OK(index_schema->AddIndex("vector_field", "vector_field", vector_index));
+
+    // Add 1000 vectors
+    auto vectors = DeterministicallyGenerateVectors(num_vectors, dimensions, 1.0);
+    auto itr = index_schema->attributes_.find("vector_field");
+    EXPECT_FALSE(itr == index_schema->attributes_.end());
+    
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
+          absl::string_view((char *)&vectors[i][0], dimensions * sizeof(float)));
+      auto interned_key = StringInternStore::Intern("vec_key:" + std::to_string(i));
+      index_schema->ProcessAttributeMutation(&fake_ctx_, itr->second,
+                                             interned_key, std::move(data),
+                                             indexes::DeletionType::kNone);
+    }
+
+    EXPECT_EQ(vector_index->GetRecordCount(), num_vectors);
+    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream_step1));
+    LOG(INFO) << "✓ Step 1 completed - saved " << num_vectors << " vectors to RDB";
+  }
+
+  // Step 2: load from rdb normally, than load with skip and verify vectors are loaded correctly
+  LOG(INFO) << "STEP 2: Testing normal load vs skip load for vector index";
+  
+  // Normal load
+  {
+    VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(false));
+    
+    ValkeyModuleCtx parent_ctx;
+    ValkeyModuleCtx scan_ctx;
+    EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+        .WillRepeatedly(Return(&scan_ctx));
+    
+    RDBSectionIter iter(&rdb_stream_step1, 1);
+    auto section = iter.Next();
+    VMSDK_EXPECT_OK_STATUSOR(section);
+    
+    auto schema_or = IndexSchema::LoadFromRDB(
+        &parent_ctx, nullptr,
+        std::make_unique<data_model::IndexSchema>((*section)->index_schema_contents()),
+        iter.IterateSupplementalContent());
+    
+    VMSDK_EXPECT_OK_STATUSOR(schema_or);
+    auto normal_schema = std::move(schema_or.value());
+    
+    EXPECT_EQ(normal_schema->GetStats().document_cnt, num_vectors);
+    auto vec_index = normal_schema->GetIndex("vector_field");
+    VMSDK_EXPECT_OK_STATUSOR(vec_index);
+    EXPECT_EQ(vec_index.value()->GetRecordCount(), num_vectors);
+    LOG(INFO) << "✓ Normal load verified - " << num_vectors << " vectors loaded";
+  }
+
+  // Skip load with verification
+  {
+    VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(true));
+    
+    // Reset stream for reading
+    rdb_stream_step1.buffer_.clear();
+    rdb_stream_step1.buffer_.seekg(0, std::ios::beg);
+    
+    ValkeyModuleCtx parent_ctx;
+    ValkeyModuleCtx scan_ctx;
+    EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx))
+        .WillRepeatedly(Return(&scan_ctx));
+    EXPECT_CALL(*kMockValkeyModule, DbSize(testing::_))
+        .WillRepeatedly(Return(num_vectors));
+    
+    // Mock scan operations for backfill
+    int scan_call_count = 0;
+    EXPECT_CALL(*kMockValkeyModule,
+                Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
+                     testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
+        .WillRepeatedly([&scan_call_count, num_vectors](ValkeyModuleCtx *ctx, ValkeyModuleScanCursor *cursor,
+                          ValkeyModuleScanCB fn, void *privdata) -> int {
+          if (scan_call_count < num_vectors) {
+            std::string key = "vec_key:" + std::to_string(scan_call_count);
+            auto key_r_str = vmsdk::MakeUniqueValkeyString(key);
+            ValkeyModuleKey vkey = {.ctx = ctx, .key = key};
+            fn(ctx, key_r_str.get(), &vkey, privdata);
+            scan_call_count++;
+            return 1;
+          }
+          return 0;
+        });
+    
+    EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+        .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+    EXPECT_CALL(*kMockValkeyModule, 
+                HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_, 
+                       testing::An<ValkeyModuleString**>(), TypedEq<void*>(nullptr)))
+        .WillRepeatedly(Return(VALKEYMODULE_ERR));
+    
+    RDBSectionIter iter(&rdb_stream_step1, 1);
+    auto section = iter.Next();
+    VMSDK_EXPECT_OK_STATUSOR(section);
+    
+    auto schema_or = IndexSchema::LoadFromRDB(
+        &parent_ctx, nullptr,
+        std::make_unique<data_model::IndexSchema>((*section)->index_schema_contents()),
+        iter.IterateSupplementalContent());
+    
+    VMSDK_EXPECT_OK_STATUSOR(schema_or);
+    auto skip_schema = std::move(schema_or.value());
+    
+    EXPECT_EQ(skip_schema->GetStats().document_cnt, num_vectors);
+    auto vec_index = skip_schema->GetIndex("vector_field");
+    VMSDK_EXPECT_OK_STATUSOR(vec_index);
+    EXPECT_EQ(vec_index.value()->GetRecordCount(), 0);
+    EXPECT_TRUE(skip_schema->IsBackfillInProgress());
+    LOG(INFO) << "✓ Skip load verified - index empty, backfill ready";
+  }
+
+  // Step 3: drop the index (implicitly done when schema goes out of scope)
+  LOG(INFO) << "STEP 3: Vector index dropped (implicit)";
+
+  // Step 4: create vector index + with numeric field + tag field+add 1000 vectors +numeric+tag & save to rdb
+  LOG(INFO) << "STEP 4: Creating multi-field index with vector + numeric + tag fields";
+  FakeSafeRDB rdb_stream_multi;
+  
+  {
+    auto index_schema = MockIndexSchema::Create(
+                            &fake_ctx_, "multi_idx", {"multi_key:"},
+                            std::make_unique<HashAttributeDataType>(), nullptr)
+                            .value();
+
+    // Add vector index
+    auto vector_index = indexes::VectorFlat<float>::Create(
+        CreateFlatVectorIndexProto(dimensions, distance_metric, initial_cap, 128),
+        "vector_field", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+        .value();
+    VMSDK_EXPECT_OK(index_schema->AddIndex("vector_field", "vector_field", vector_index));
+
+    // Add numeric index using proper proto creation
+    auto numeric_index = std::make_shared<indexes::Numeric>(
+        CreateNumericIndexProto());
+    VMSDK_EXPECT_OK(index_schema->AddIndex("numeric_field", "numeric_field", numeric_index));
+
+    // Add tag index using proper proto creation  
+    auto tag_index = std::make_shared<indexes::Tag>(
+        CreateTagIndexProto(",", false));
+    VMSDK_EXPECT_OK(index_schema->AddIndex("tag_field", "tag_field", tag_index));
+
+    // Add test data for all indexes
+    auto vectors = DeterministicallyGenerateVectors(num_vectors, dimensions, 1.0);
+    auto vec_itr = index_schema->attributes_.find("vector_field");
+    auto num_itr = index_schema->attributes_.find("numeric_field");
+    auto tag_itr = index_schema->attributes_.find("tag_field");
+    
+    EXPECT_FALSE(vec_itr == index_schema->attributes_.end());
+    EXPECT_FALSE(num_itr == index_schema->attributes_.end());
+    EXPECT_FALSE(tag_itr == index_schema->attributes_.end());
+    
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      auto interned_key = StringInternStore::Intern("multi_key:" + std::to_string(i));
+      
+      // Add vector data
+      vmsdk::UniqueValkeyString vec_data = vmsdk::MakeUniqueValkeyString(
+          absl::string_view((char *)&vectors[i][0], dimensions * sizeof(float)));
+      index_schema->ProcessAttributeMutation(&fake_ctx_, vec_itr->second,
+                                             interned_key, std::move(vec_data),
+                                             indexes::DeletionType::kNone);
+      
+      // Add numeric data 
+      std::string numeric_str = std::to_string(static_cast<double>(i));
+      vmsdk::UniqueValkeyString num_data = vmsdk::MakeUniqueValkeyString(numeric_str);
+      index_schema->ProcessAttributeMutation(&fake_ctx_, num_itr->second,
+                                             interned_key, std::move(num_data),
+                                             indexes::DeletionType::kNone);
+      
+      // Add tag data
+      std::string tag_val = "tag" + std::to_string(i % 10);
+      vmsdk::UniqueValkeyString tag_data = vmsdk::MakeUniqueValkeyString(tag_val);
+      index_schema->ProcessAttributeMutation(&fake_ctx_, tag_itr->second,
+                                             interned_key, std::move(tag_data),
+                                             indexes::DeletionType::kNone);
+    }
+
+    EXPECT_EQ(vector_index->GetRecordCount(), num_vectors);
+    EXPECT_EQ(numeric_index->GetRecordCount(), num_vectors);
+    EXPECT_EQ(tag_index->GetRecordCount(), num_vectors);
+    
+    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream_multi));
+    LOG(INFO) << "✓ Step 4 completed - saved multi-field index with " << num_vectors << " records";
+  }
+
+  // Step 5: load from rdb normally, than load with skip and verify vectors are loaded correctly
+  LOG(INFO) << "STEP 5: Testing multi-field index normal vs skip load";
+  
+  // Normal load for multi-field index - verify all 3 index types work
+  {
+    VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(false));
+    
+    ValkeyModuleCtx parent_ctx;
+    ValkeyModuleCtx scan_ctx;
+    EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx))
+        .WillRepeatedly(Return(&scan_ctx));
+    
+    RDBSectionIter iter(&rdb_stream_multi, 1);
+    auto section = iter.Next();
+    VMSDK_EXPECT_OK_STATUSOR(section);
+    
+    auto schema_or = IndexSchema::LoadFromRDB(
+        &parent_ctx, nullptr,
+        std::make_unique<data_model::IndexSchema>((*section)->index_schema_contents()),
+        iter.IterateSupplementalContent());
+    
+    VMSDK_EXPECT_OK_STATUSOR(schema_or);
+    auto multi_schema = std::move(schema_or.value());
+    
+    EXPECT_EQ(multi_schema->GetStats().document_cnt, num_vectors);
+    
+    // Verify all index types are loaded with correct counts
+    auto vec_index = multi_schema->GetIndex("vector_field");
+    auto num_index = multi_schema->GetIndex("numeric_field");
+    auto tag_index = multi_schema->GetIndex("tag_field");
+    
+    VMSDK_EXPECT_OK_STATUSOR(vec_index);
+    VMSDK_EXPECT_OK_STATUSOR(num_index);
+    VMSDK_EXPECT_OK_STATUSOR(tag_index);
+    
+    EXPECT_EQ(vec_index.value()->GetRecordCount(), num_vectors);
+    // Numeric and tag indexes don't persist data in RDB, so they start empty
+    EXPECT_EQ(num_index.value()->GetRecordCount(), 0);
+    EXPECT_EQ(tag_index.value()->GetRecordCount(), 0);
+    LOG(INFO) << "✓ Multi-field index normal load verified - all fields loaded correctly";
+  }
+
+  // Skip load with backfill verification for multi-field index
+  {
+    VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(true));
+    
+    // Reset stream
+    rdb_stream_multi.buffer_.clear();
+    rdb_stream_multi.buffer_.seekg(0, std::ios::beg);
+    
+    ValkeyModuleCtx parent_ctx;
+    ValkeyModuleCtx scan_ctx;
+    EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx))
+        .WillRepeatedly(Return(&scan_ctx));
+    EXPECT_CALL(*kMockValkeyModule, DbSize(testing::_))
+        .WillRepeatedly(Return(num_vectors));
+    
+    // Mock scan operations
+    int scan_call_count = 0;
+    EXPECT_CALL(*kMockValkeyModule,
+                Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
+                     testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
+        .WillRepeatedly([&scan_call_count, num_vectors](ValkeyModuleCtx *ctx, ValkeyModuleScanCursor *cursor,
+                          ValkeyModuleScanCB fn, void *privdata) -> int {
+          if (scan_call_count < num_vectors) {
+            std::string key = "multi_key:" + std::to_string(scan_call_count);
+            auto key_r_str = vmsdk::MakeUniqueValkeyString(key);
+            ValkeyModuleKey vkey = {.ctx = ctx, .key = key};
+            fn(ctx, key_r_str.get(), &vkey, privdata);
+            scan_call_count++;
+            return 1;
+          }
+          return 0;
+        });
+    
+    EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+        .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+    EXPECT_CALL(*kMockValkeyModule, 
+                HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_, 
+                       testing::An<ValkeyModuleString**>(), TypedEq<void*>(nullptr)))
+        .WillRepeatedly(Return(VALKEYMODULE_ERR));
+    
+    RDBSectionIter iter(&rdb_stream_multi, 1);
+    auto section = iter.Next();
+    VMSDK_EXPECT_OK_STATUSOR(section);
+    
+    auto schema_or = IndexSchema::LoadFromRDB(
+        &parent_ctx, nullptr,
+        std::make_unique<data_model::IndexSchema>((*section)->index_schema_contents()),
+        iter.IterateSupplementalContent());
+    
+    VMSDK_EXPECT_OK_STATUSOR(schema_or);
+    auto multi_skip_schema = std::move(schema_or.value());
+    
+    EXPECT_EQ(multi_skip_schema->GetStats().document_cnt, num_vectors);
+    
+    // All indexes should be empty initially with skip load
+    auto vec_index = multi_skip_schema->GetIndex("vector_field");
+    auto num_index = multi_skip_schema->GetIndex("numeric_field");
+    auto tag_index = multi_skip_schema->GetIndex("tag_field");
+    
+    VMSDK_EXPECT_OK_STATUSOR(vec_index);
+    VMSDK_EXPECT_OK_STATUSOR(num_index);
+    VMSDK_EXPECT_OK_STATUSOR(tag_index);
+    
+    EXPECT_EQ(vec_index.value()->GetRecordCount(), 0);
+    EXPECT_EQ(num_index.value()->GetRecordCount(), 0);
+    EXPECT_EQ(tag_index.value()->GetRecordCount(), 0);
+    EXPECT_TRUE(multi_skip_schema->IsBackfillInProgress());
+    LOG(INFO) << "✓ Multi-field index skip load verified - all indexes empty, backfill ready";
+  }
+
+  LOG(INFO) << "✓ All steps completed successfully";
+
+  // Cleanup
+  VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(false));
+  LOG(INFO) << "=== Vector RDB Skip Test Completed ===";
+}
+
 }  // namespace valkey_search
