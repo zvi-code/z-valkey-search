@@ -155,7 +155,9 @@ import time
 import glob
 import re
 from pathlib import Path
-
+import sys
+import random
+import numpy as np
 # Try to import protobuf - if not available, we'll do basic parsing
 try:
     import google.protobuf
@@ -177,7 +179,7 @@ def crc64(data, init=0):
     This implements memrev64ifbe - the byte-order aware CRC64 used by Redis/Valkey.
     Module IDs in Redis/Valkey are calculated as CRC64 hash of the module type name.
     """
-    import sys
+
     
     # Redis CRC64 polynomial: 0xc96c5795d7870f42
     table = []
@@ -577,14 +579,14 @@ def check_env_vars():
         return None, None, None  
     return valkey_server, valkey_cli, module_path
 
-def create_valkey_config(temp_dir, module_path, rdb_path):
+def create_valkey_config(temp_dir, module_path, rdb_path, port=6380):
     """Create a temporary Valkey configuration file"""
     config_path = os.path.join(temp_dir, "valkey.conf")
     log_path = os.path.join(temp_dir, "valkey.log")
     with open(config_path, 'w') as f:
         f.write(f"""
 # Basic configuration
-port 6380
+port {port}
 bind 127.0.0.1
 timeout 0
 tcp-keepalive 300
@@ -599,10 +601,10 @@ save 60 10000
 loadmodule {module_path}
 
 # RDB settings
-dbfilename dump.rdb
+dbfilename {rdb_path}
 dir ./
 rdbcompression no
-rdbchecksum yes
+rdbchecksum no
 
 # Logging
 loglevel notice
@@ -614,16 +616,15 @@ appendonly no
     return config_path, log_path
 
 
-def run_valkey_cli_commands(port=6380):
+def run_valkey_cli_commands(port=6380, dim=5, num_vectors=10):
     """Run the sequence of commands to create index and ingest vectors"""
     index_name = "zvisIndex"
-
     # Create the actual vector index
     print(f"Creating vector index '{index_name}'...")
     result = subprocess.run([
-        valkey_cli, "-p", str(port), "FT.CREATE", index_name, 
-        "SCHEMA", "z-vector", "VECTOR", "HNSW", "6", 
-        "TYPE", "FLOAT32", "DIM", "5", "DISTANCE_METRIC", "L2"
+        valkey_cli, "-p", str(port), "FT.CREATE", index_name,
+        "SCHEMA", "z-vector", "VECTOR", "HNSW", "6",
+        "TYPE", "FLOAT32", "DIM", str(dim), "DISTANCE_METRIC", "L2"
     ], capture_output=True, text=True)
     
     if result.returncode != 0:
@@ -660,21 +661,31 @@ def run_valkey_cli_commands(port=6380):
         print(f"⚠ Could not get index info: {result.stderr}")
 
     # Add vectors using binary format
-    vectors = [
-        [1.0, 2.0, 3.0, 4.0, 0.0],
-        [2.0, 3.0, 4.0, 5.0, 0.0],
-        [3.0, 4.0, 5.0, 6.0, 0.0],
-        [4.0, 5.0, 6.0, 7.0, 0.0],
-        [5.0, 6.0, 7.0, 8.0, 0.0]
-    ]
-    
-    for i, vector in enumerate(vectors):
+    # vectors = [
+    #     [1.0, 2.0, 3.0, 4.0, 0.0],
+    #     [2.0, 3.0, 4.0, 5.0, 0.0],
+    #     [3.0, 4.0, 5.0, 6.0, 0.0],
+    #     [4.0, 5.0, 6.0, 7.0, 0.0],
+    #     [5.0, 6.0, 7.0, 8.0, 0.0]
+    # ]
+    # generate vectors of dim dynamically
+    base_vector = np.random.rand(dim).astype(np.float32)
+
+    for i in range(num_vectors):
         # Convert to binary format (direct bytes, not hex string for HSET)
-        
-        vector_bytes = struct.pack(f'{len(vector)}f', *vector)
-        #struct.pack('4f', *vector)
-        
-        print(f"Adding vector {i+1}: {vector}")
+        # create vector efficiently by using base_vector_bytes and modifying 10% of the coordinates (at least 1)
+        # modify base_vector first 2 float32 coordinates randomly to float32
+        base_vector[0] = random.uniform(0, 10)
+        base_vector[1] = random.uniform(0, 10)
+
+        # base_vector = np.random.rand(dim).astype(np.float32)  # Generate new random vector
+        # base_vector[0] = random.uniform(0, 10)  # Modify first coordinate
+        vector_bytes = base_vector.tobytes()  # Convert to bytes directly
+        # report progress in % progress every 10%
+        if i % 1000 == 0:
+            print(f"Adding vector {i+1}/{num_vectors} ({(i+1)/num_vectors*100:.1f}%)")
+
+        # print(f"Adding vector {i+1}: {vector}")
         # Use binary data directly via subprocess stdin
         cmd_input = vector_bytes
         result = subprocess.run([
@@ -684,7 +695,7 @@ def run_valkey_cli_commands(port=6380):
         if result.returncode != 0:
             print(f"Error adding vector {i}: {result.stderr}")
             return False
-        print(f"Vector {i+1} added: {result.stdout.decode().strip()}")
+        # print(f"Vector {i+1} added: {result.stdout.decode().strip()}")
 
     # Wait a bit for indexing to process
     print("⏳ Waiting for indexing to process...")
@@ -1684,7 +1695,7 @@ def analyze_rdb_hex(rdb_path):
     
     print(f"File size: {len(data)} bytes")
     print(f"\nFull hex dump:")
-    print_hex_dump(data)
+    print_hex_dump(data[:500], indent="  ", max_bytes=500)
     
     # First, split the RDB into logical sections
     print(f"\n{'='*60}")
@@ -2834,7 +2845,9 @@ def main():
     """Main function to orchestrate the RDB analysis"""
     print("ValkeySearch RDB Structure Analysis")
     print("=" * 50)
-    
+    port = 6380
+    num_vectors = 100000
+    vector_dimension = 1024
     # Check environment variables
     valkey_server, valkey_cli, module_path = check_env_vars()
     if not valkey_server or not module_path:
@@ -2850,15 +2863,15 @@ def main():
         print(f"\nWorking directory: {temp_dir}")
         
         # Clean up old RDB files if any
-        cleanup_old_rdb_files(temp_dir)
+        # cleanup_old_rdb_files(temp_dir)
         
         # Set up paths
-        rdb_path = os.path.join('./', "dump.rdb")
-        
+        rdb_path = os.path.join('./', f'dump_v{num_vectors}_d{vector_dimension}.rdb')
+
         # Clean up any existing RDB files to ensure fresh start
-        cleanup_old_rdb_files('./')
+        # cleanup_old_rdb_files('./')
         
-        config_path, log_path = create_valkey_config(temp_dir, module_path, rdb_path)
+        config_path, log_path = create_valkey_config(temp_dir, module_path, f'dump_v{num_vectors}_d{vector_dimension}.rdb', port)
         
         print(f"Config file: {config_path}")
         print(f"Log file: {log_path}")
@@ -2883,7 +2896,7 @@ def main():
                 
             # Check if server is running
             result = subprocess.run([
-                valkey_cli, "-p", "6380", "ping"
+                valkey_cli, "-p", str(port), "ping"
             ], capture_output=True, text=True, timeout=5)
             
             if result.returncode != 0:
@@ -2895,14 +2908,14 @@ def main():
             # Set RDB compression to 'no' for testing
             print("Setting RDB compression to 'no' for testing...")
             result = subprocess.run([
-                valkey_cli, "-p", "6380", "config", "set", "rdbcompression", "no"
+                valkey_cli, "-p", str(port), "config", "set", "rdbcompression", "no"
             ], capture_output=True, text=True, timeout=5)
             if result.returncode != 0:
                 print(f"Error setting RDB compression: {result.stderr}")
                 return 1
             # read the configs values
             result = subprocess.run([
-                valkey_cli, "-p", "6380", "config", "get", "rdbcompression"
+                valkey_cli, "-p", str(port), "config", "get", "rdbcompression"
             ], capture_output=True, text=True, timeout=5)
             if result.returncode != 0:
                 print(f"Error getting RDB compression config: {result.stderr}")
@@ -2911,14 +2924,14 @@ def main():
             # disable rdbchecksum 
             print("Setting RDB checksum to 'no' for testing...")
             result = subprocess.run([
-                valkey_cli, "-p", "6380", "config", "set", "rdbchecksum", "no"
+                valkey_cli, "-p", str(port), "config", "set", "rdbchecksum", "no"
             ], capture_output=True, text=True, timeout=5)
             if result.returncode != 0:
                 print(f"Error setting RDB checksum: {result.stderr}")
                 return 1
             # read the configs values
             result = subprocess.run([
-                valkey_cli, "-p", "6380", "config", "get", "rdbchecksum"
+                valkey_cli, "-p", str(port), "config", "get", "rdbchecksum"
             ], capture_output=True, text=True, timeout=5)
             if result.returncode != 0:
                 print(f"Error getting RDB checksum config: {result.stderr}")
@@ -2927,7 +2940,7 @@ def main():
 
             # Run commands to create index and ingest vectors
             print(f"\nCreating vector index and ingesting data...")
-            if not run_valkey_cli_commands():
+            if not run_valkey_cli_commands(port, vector_dimension, num_vectors):
                 print("Error running Valkey commands")
                 return 1
             
@@ -2985,14 +2998,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
-# # Example usage:
-# if __name__ == "__main__":
-#     # Test with the hex data from your output
-#     test_data = bytes.fromhex(
-#         "02800001000002010540410801100021a3b0a076d79496e64657812001801322"
-#         "60a0676656374c7212067665637406f721a140a12080418012001288050320708"
-#         "10010c8011180a3a020805400005"
-#     )
-    
-#     analyze_valkey_search_module_payload_fixed(test_data)
