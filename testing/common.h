@@ -209,7 +209,7 @@ data_model::VectorIndex CreateFlatVectorIndexProto(
 
 data_model::NumericIndex CreateNumericIndexProto();
 
-data_model::TagIndex CreateTagIndexProto(const std::string& separator = ",", 
+data_model::TagIndex CreateTagIndexProto(const std::string& separator = ",",
                                          bool case_sensitive = false);
 
 class MockIndexSchema : public IndexSchema {

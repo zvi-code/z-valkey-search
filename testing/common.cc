@@ -143,12 +143,9 @@ data_model::VectorIndex CreateFlatVectorIndexProto(
   return vector_index_proto;
 }
 
-data_model::NumericIndex CreateNumericIndexProto() {
-  data_model::NumericIndex numeric_index_proto;
-  return numeric_index_proto;
-}
+data_model::NumericIndex CreateNumericIndexProto() { return {}; }
 
-data_model::TagIndex CreateTagIndexProto(const std::string& separator, 
+data_model::TagIndex CreateTagIndexProto(const std::string &separator,
                                          bool case_sensitive) {
   data_model::TagIndex tag_index_proto;
   tag_index_proto.set_separator(separator);
