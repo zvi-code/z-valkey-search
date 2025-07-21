@@ -168,3 +168,9 @@ target_link_libraries(valkey_utils_test PRIVATE intrusive_list)
 target_link_libraries(valkey_utils_test PRIVATE lru)
 target_link_libraries(valkey_utils_test PRIVATE segment_tree)
 finalize_test_flags(valkey_utils_test)
+
+# Memory benchmark test - needs to be after testing_common_base is defined
+add_executable(memory_benchmark_test memory_benchmark_test.cc)
+target_include_directories(memory_benchmark_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(memory_benchmark_test PRIVATE testing_common_base)
+finalize_test_flags(memory_benchmark_test)

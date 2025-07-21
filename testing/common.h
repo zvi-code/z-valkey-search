@@ -53,9 +53,9 @@
 
 namespace valkey_search {
 template <typename T, typename K>
-class IndexTeser : public T {
+class IndexTester : public T {
  public:
-  explicit IndexTeser(K proto) : T(K(proto)) {}
+  explicit IndexTester(K proto) : T(K(proto)) {}
   absl::StatusOr<bool> AddRecord(absl::string_view key,
                                  absl::string_view data) {
     auto interned_key = StringInternStore::Intern(key);

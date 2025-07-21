@@ -40,11 +40,11 @@
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
+#include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
-#include "src/vector_externalizer.h"
-#include "src/metrics.h"
 #include "src/valkey_search_options.h"
+#include "src/vector_externalizer.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -66,7 +66,8 @@ IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
   ValkeyModule_SelectDb(scan_ctx.get(), db_num);
   db_size = ValkeyModule_DbSize(scan_ctx.get());
   VMSDK_LOG(NOTICE, ctx) << "Starting backfill for index schema in DB "
-                         << db_num << ": " << name << " (size: " << db_size << ")";
+                         << db_num << ": " << name << " (size: " << db_size
+                         << ")";
 }
 
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
@@ -367,9 +368,11 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
   }
   if (added) {
     // Track key modifications by data type
-    if (attribute_data_type_->ToProto() == data_model::ATTRIBUTE_DATA_TYPE_HASH) {
+    if (attribute_data_type_->ToProto() ==
+        data_model::ATTRIBUTE_DATA_TYPE_HASH) {
       Metrics::GetStats().ingest_hash_keys++;
-    } else if (attribute_data_type_->ToProto() == data_model::ATTRIBUTE_DATA_TYPE_JSON) {
+    } else if (attribute_data_type_->ToProto() ==
+               data_model::ATTRIBUTE_DATA_TYPE_JSON) {
       Metrics::GetStats().ingest_json_keys++;
     }
     ProcessMutation(ctx, mutated_attributes, interned_key, from_backfill);
@@ -472,11 +475,11 @@ void IndexSchema::ProcessMultiQueue() {
   if (ABSL_PREDICT_TRUE(multi_mutations.keys.empty())) {
     return;
   }
-  
+
   // Track batch metrics
   Metrics::GetStats().ingest_last_batch_size = multi_mutations.keys.size();
   Metrics::GetStats().ingest_total_batches++;
-  
+
   multi_mutations.blocking_counter =
       std::make_unique<absl::BlockingCounter>(multi_mutations.keys.size());
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
@@ -854,26 +857,29 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
     SupplementalContentIter &&supplemental_iter) {
   // flag to skip loading attributes and indices
   bool skip_loading_index_data = options::GetSkipIndexLoad().GetValue();
-  // When skipping index data, create attributes immediately (with empty indexes)
-  bool load_attributes_on_create = skip_loading_index_data; 
-  // Attributes will be loaded from supplemental content. if !load_attributes_on_create
+  // When skipping index data, create attributes immediately (with empty
+  // indexes)
+  bool load_attributes_on_create = skip_loading_index_data;
+  // Attributes will be loaded from supplemental content. if
+  // !load_attributes_on_create
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
       IndexSchema::Create(ctx, *index_schema_proto, mutations_thread_pool,
                           !load_attributes_on_create));
-  
+
   if (ABSL_PREDICT_FALSE(skip_loading_index_data)) {
-    VMSDK_LOG(NOTICE, ctx) << "Creating empty indexes for schema '" 
-                           << index_schema_proto->name() 
+    VMSDK_LOG(NOTICE, ctx) << "Creating empty indexes for schema '"
+                           << index_schema_proto->name()
                            << "' - will rebuild via backfill";
     while (supplemental_iter.HasNext()) {
-      VMSDK_ASSIGN_OR_RETURN(auto supplemental_content, supplemental_iter.Next());
+      VMSDK_ASSIGN_OR_RETURN(auto supplemental_content,
+                             supplemental_iter.Next());
       auto chunk_it = supplemental_iter.IterateChunks();
       while (chunk_it.HasNext()) {
-        VMSDK_ASSIGN_OR_RETURN(auto chunk_result, chunk_it.Next());
-        (void)chunk_result; // Mark as intentionally unused
+        VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto chunk_result,
+                               chunk_it.Next());
       }
-    }    
+    }
     return index_schema;
   }
 
@@ -1002,7 +1008,8 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
     itr->second.attributes.value() = std::move(mutated_attributes);
     itr->second.from_backfill = from_backfill;
     if (ABSL_PREDICT_TRUE(block_client)) {
-      vmsdk::BlockedClient blocked_client(ctx, true, GetBlockedCategoryFromProto());
+      vmsdk::BlockedClient blocked_client(ctx, true,
+                                          GetBlockedCategoryFromProto());
       blocked_client.MeasureTimeStart();
       itr->second.blocked_clients.emplace_back(std::move(blocked_client));
     }
@@ -1016,7 +1023,8 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
         std::move(mutated_attribute.second);
   }
   if (ABSL_PREDICT_TRUE(block_client)) {
-    vmsdk::BlockedClient blocked_client(ctx, true, GetBlockedCategoryFromProto());
+    vmsdk::BlockedClient blocked_client(ctx, true,
+                                        GetBlockedCategoryFromProto());
     blocked_client.MeasureTimeStart();
     itr->second.blocked_clients.emplace_back(std::move(blocked_client));
   }

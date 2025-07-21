@@ -29,10 +29,10 @@ class TagIndexTest : public vmsdk::ValkeyTest {
     data_model::TagIndex tag_index_proto;
     tag_index_proto.set_separator(",");
     tag_index_proto.set_case_sensitive(false);
-    index = std::make_unique<IndexTeser<Tag, data_model::TagIndex>>(
+    index = std::make_unique<IndexTester<Tag, data_model::TagIndex>>(
         tag_index_proto);
   }
-  std::unique_ptr<IndexTeser<Tag, data_model::TagIndex>> index;
+  std::unique_ptr<IndexTester<Tag, data_model::TagIndex>> index;
 };
 
 std::vector<std::string> Fetch(
