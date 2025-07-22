@@ -2,6 +2,7 @@
 """
 Comprehensive Tag Index memory benchmarking using hash_generator.py
 for efficient data generation with various sharing patterns.
+Maintains ALL original functionality while integrating new generator.
 """
 
 import os
@@ -10,7 +11,7 @@ import time
 import struct
 import threading
 import logging
-from typing import Dict, List, Tuple, Optional, Iterator
+from typing import Dict, List, Tuple, Optional, Iterator, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
@@ -40,6 +41,54 @@ class BenchmarkScenario:
     description: str
 
 
+class ClientPool:
+    """Thread-indexed pool of Valkey clients for multi-threaded operations"""
+    
+    def __init__(self, server, pool_size: int):
+        self.server = server
+        self.pool_size = pool_size
+        self.clients = []
+        self.lock = threading.Lock()
+        self.thread_local = threading.local()
+        
+        # Pre-create all clients
+        for i in range(pool_size):
+            client = self.server.get_new_client()
+            self.clients.append(client)
+    
+    def get_client_for_thread(self, thread_index: int) -> Valkey:
+        """Get a dedicated client for a specific thread index"""
+        if thread_index >= self.pool_size:
+            raise ValueError(f"Thread index {thread_index} exceeds pool size {self.pool_size}")
+        return self.clients[thread_index]
+    
+    def get_client(self) -> Valkey:
+        """Get a client - backward compatibility method that uses thread-local storage"""
+        # Check if we already have a client assigned to this thread
+        if hasattr(self.thread_local, 'client'):
+            return self.thread_local.client
+        
+        # Assign a client based on thread ID hash for deterministic assignment
+        import threading
+        thread_id = threading.get_ident()
+        client_index = thread_id % self.pool_size
+        self.thread_local.client = self.clients[client_index]
+        return self.thread_local.client
+    
+    def return_client(self, client: Valkey):
+        """Return a client to the pool - no-op for thread-indexed clients"""
+        # In thread-indexed mode, clients are not returned, they stay with their threads
+        pass
+    
+    def close_all(self):
+        """Close all clients in the pool"""
+        for client in self.clients:
+            try:
+                client.close()
+            except:
+                pass
+
+
 class ThreadSafeCounter:
     """Thread-safe counter for progress tracking"""
     def __init__(self, initial_value=0):
@@ -57,7 +106,18 @@ class ThreadSafeCounter:
 
 
 class ProgressMonitor:
-    """Background thread monitor for long-running operations"""
+    """
+    Background thread to monitor and report progress during long operations.
+    
+    The monitor queries Valkey directly for memory, key count, and index progress.
+    Test methods can use:
+    - set_index_name(name) to add a single index to monitor
+    - set_index_names([name1, name2, ...]) to add multiple indexes to monitor
+    - remove_index_name(name) to stop monitoring a specific index
+    - clear_index_names() to stop monitoring all indexes
+    
+    The monitor will track all specified indexes and report their combined status.
+    """
     
     def __init__(self, server, operation_name: str):
         self.server = server
@@ -67,10 +127,10 @@ class ProgressMonitor:
         self.start_time = time.time()
         self.last_memory = 0
         self.last_keys = 0
-        self.messages = []
-        self.current_status = {}
-        self.lock = threading.Lock()
-        self.active_index_names = set()
+        self.messages = []  # Queue for status messages
+        self.current_status = {}  # Current operation status
+        self.lock = threading.Lock()  # Thread safety
+        self.active_index_names = set()  # Set of index names to monitor (set by test)
         
     def start(self):
         """Start the monitoring thread"""
@@ -98,95 +158,140 @@ class ProgressMonitor:
         with self.lock:
             self.active_index_names.add(index_name)
     
+    def set_index_names(self, index_names: List[str]):
+        """Set multiple index names to monitor for indexing progress"""
+        with self.lock:
+            self.active_index_names.update(index_names)
+    
+    def remove_index_name(self, index_name: str):
+        """Remove a specific index from monitoring"""
+        with self.lock:
+            self.active_index_names.discard(index_name)
+    
     def clear_index_names(self):
-        """Clear all index names"""
+        """Clear all index names (stop monitoring indexing progress)"""
         with self.lock:
             self.active_index_names.clear()
+    
+    def clear_index_name(self):
+        """Backward compatibility: Clear all index names (stop monitoring indexing progress)"""
+        self.clear_index_names()
+    
+    def get_monitored_indexes(self) -> List[str]:
+        """Get the list of currently monitored index names"""
+        with self.lock:
+            return list(self.active_index_names)
     
     def update_status(self, status_dict: dict):
         """Update the current operation status"""
         with self.lock:
             self.current_status.update(status_dict)
-    
-    def update_progress(self, current: int, total: int, extra_info: str = ""):
-        """Compatibility method for direct progress updates"""
-        self.update_status({
-            "Progress": f"{current:,}/{total:,} ({current/total*100:.1f}%)",
-            "Extra": extra_info
-        })
             
     def _monitor(self):
         """Background monitoring loop"""
         last_report = time.time()
-        client = self.server.get_new_client()
+        client: Valkey = self.server.get_new_client()
+        logging.info(f"📊 Monitoring started for: {self.operation_name}")
         
         while self.running:
             try:
                 current_time = time.time()
                 elapsed = current_time - self.start_time
                 
-                # Print queued messages
+                # Print any queued messages immediately
                 with self.lock:
                     while self.messages:
                         message = self.messages.pop(0)
                         logging.info(message)
                         sys.stdout.flush()
                 
-                # Report stats every 5 seconds
+                # Report system stats every 5 seconds
                 if current_time - last_report >= 5.0:
                     # Get memory info
                     memory_info = client.info("memory")
                     current_memory_kb = memory_info['used_memory'] // 1024
                     memory_delta = current_memory_kb - self.last_memory
                     
-                    # Get key count
+                    # Get key count from db info
                     db_info = client.info("keyspace")
                     current_keys = 0
-                    if 'db0' in db_info:
-                        if isinstance(db_info['db0'], dict):
-                            current_keys = db_info['db0'].get('keys', 0)
-                        else:
+                    if 'db0' in db_info and isinstance(db_info['db0'], dict) and 'keys' in db_info['db0']:
+                        current_keys = db_info['db0']['keys']
+                    elif 'db0' in db_info and isinstance(db_info['db0'], str) and 'keys=' in db_info['db0']:
+                        # Parse "keys=123,expires=0,avg_ttl=0" format
+                        try:
+                            current_keys = int(db_info['db0'].split('keys=')[1].split(',')[0])
+                        except:
+                            current_keys = 0
+                    
+                    # Try to get index information if available (during indexing phase)
+                    index_info = {}
+                    current_index_names = set()
+                    with self.lock:
+                        current_index_names = self.active_index_names.copy()
+                    
+                    if current_index_names:
+                        for index_name in current_index_names:
                             try:
-                                current_keys = int(db_info['db0'].split('keys=')[1].split(',')[0])
-                            except:
-                                current_keys = 0
+                                ft_info = client.execute_command("FT.INFO", index_name)
+                                # Parse FT.INFO response for this index
+                                index_data = {}
+                                for i in range(0, len(ft_info), 2):
+                                    if i + 1 < len(ft_info):
+                                        key = ft_info[i].decode() if isinstance(ft_info[i], bytes) else str(ft_info[i])
+                                        value = ft_info[i + 1]
+                                        if isinstance(value, bytes):
+                                            try:
+                                                value = value.decode()
+                                            except:
+                                                pass
+                                        index_data[key] = value
+                                
+                                # Store index info with index name as key
+                                index_info[index_name] = index_data
+                                
+                            except Exception as e:
+                                # Index might not exist yet or be accessible
+                                pass
                     
                     keys_delta = current_keys - self.last_keys
                     
-                    # Build status parts
+                    # Build status report
                     status_parts = [
                         f"Time: {elapsed:.0f}s",
                         f"Memory: {current_memory_kb:,} KB (+{memory_delta:,})",
                         f"Keys: {current_keys:,} (+{keys_delta:,})"
                     ]
                     
-                    # Add index info if monitoring
+                    # Add index information if available
+                    if index_info:
+                        if len(index_info) == 1:
+                            # Single index - show detailed info
+                            index_name, info = next(iter(index_info.items()))
+                            num_docs = info.get('num_docs', '0')
+                            mutation_queue = info.get('mutation_queue_size', '0')
+                            state = info.get('state', 'unknown')
+                            status_parts.append(f"Index[{index_name}]: {num_docs} docs, queue: {mutation_queue}, state: {state}")
+                        else:
+                            # Multiple indexes - show summary
+                            total_docs = sum(int(info.get('num_docs', '0')) for info in index_info.values())
+                            total_queue = sum(int(info.get('mutation_queue_size', '0')) for info in index_info.values())
+                            states = [info.get('state', 'unknown') for info in index_info.values()]
+                            status_parts.append(f"Indexes[{len(index_info)}]: {total_docs} docs, queue: {total_queue}, states: {','.join(set(states))}")
+                            
+                            # Add individual index details if there are only a few
+                            if len(index_info) <= 3:
+                                for index_name, info in index_info.items():
+                                    num_docs = info.get('num_docs', '0')
+                                    state = info.get('state', 'unknown')
+                                    status_parts.append(f"  {index_name}: {num_docs} docs, {state}")
+                    
+                    # Add current operation status from worker threads
                     with self.lock:
-                        if self.active_index_names:
-                            for index_name in self.active_index_names:
-                                try:
-                                    ft_info = client.execute_command("FT.INFO", index_name)
-                                    info_dict = {}
-                                    for i in range(0, len(ft_info), 2):
-                                        key = ft_info[i].decode() if isinstance(ft_info[i], bytes) else str(ft_info[i])
-                                        value = ft_info[i + 1]
-                                        if isinstance(value, bytes):
-                                            value = value.decode()
-                                        info_dict[key] = value
-                                    
-                                    num_docs = info_dict.get('num_docs', '0')
-                                    queue = info_dict.get('mutation_queue_size', '0')
-                                    state = info_dict.get('state', 'unknown')
-                                    status_parts.append(f"Index: {num_docs} docs, queue: {queue}, state: {state}")
-                                except:
-                                    pass
-                        
-                        # Add custom status
                         if self.current_status:
                             for key, value in self.current_status.items():
-                                if key not in ["Progress", "Extra"]:  # Avoid duplicates
-                                    status_parts.append(f"{key}: {value}")
-                    
+                                status_parts.append(f"{key}: {value}")
+                
                     logging.info(f"🔄 [{self.operation_name}] {' | '.join(status_parts)}")
                     sys.stdout.flush()
                     
@@ -196,8 +301,9 @@ class ProgressMonitor:
                     
             except Exception as e:
                 logging.info(f"⚠️ Monitor error: {e}")
+                sys.stdout.flush()
                 
-            time.sleep(1)
+            time.sleep(1)  # Check every second for messages, report every 5 seconds
 
 
 class TestMemoryBenchmark(ValkeySearchTestCaseBase):
@@ -222,220 +328,216 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             ]
         )
     
-    def process_batch_efficient(self, client: Valkey, batch: List[Tuple[str, Dict]], 
-                               thread_id: int) -> Tuple[int, float]:
-        """Process a batch of hash keys efficiently"""
-        batch_start = time.time()
-        pipe = client.pipeline(transaction=False)
-        
-        for key, fields in batch:
-            # Use HSET with mapping for efficiency
-            pipe.hset(key, mapping=fields)
-        
-        pipe.execute()
-        batch_time = time.time() - batch_start
-        
-        return len(batch), batch_time
-    
-    def insert_data_parallel(self, generator: HashKeyGenerator, client_pool: List[Valkey], 
-                           monitor: ProgressMonitor, total_keys: int, batch_size: int = 1000) -> float:
-        """Insert data using parallel processing with multiple clients"""
-        num_threads = len(client_pool)
-        keys_processed = ThreadSafeCounter(0)
-        insertion_start = time.time()
-        
-        monitor.log(f"  Starting parallel insertion with {num_threads} threads, batch size {batch_size}")
-        
-        # Create work queue of batches
-        work_queue = []
-        batch_id = 0
-        
-        for batch in generator:
-            work_queue.append((batch_id, batch))
-            batch_id += 1
-            if len(work_queue) >= num_threads * 2:  # Keep queue size manageable
-                break
-        
-        def worker(thread_id: int, client: Valkey):
-            """Worker thread function"""
-            local_processed = 0
-            while work_queue or (not generator_done.is_set()):
-                try:
-                    if work_queue:
-                        bid, batch = work_queue.pop(0)
-                        count, batch_time = self.process_batch_efficient(client, batch, thread_id)
-                        local_processed += count
-                        
-                        # Update global counter and monitor
-                        total_processed = keys_processed.increment(count)
-                        
-                        # Update monitor periodically
-                        if total_processed % (batch_size * 10) == 0 or total_processed >= total_keys:
-                            elapsed = time.time() - insertion_start
-                            keys_per_sec = total_processed / elapsed if elapsed > 0 else 0
-                            eta = (total_keys - total_processed) / keys_per_sec if keys_per_sec > 0 else 0
-                            eta_str = f"{eta/60:.1f}m" if eta > 60 else f"{eta:.0f}s"
-                            
-                            monitor.update_status({
-                                "Phase": "Insertion",
-                                "Progress": f"{total_processed:,}/{total_keys:,} ({total_processed/total_keys*100:.1f}%)",
-                                "Speed": f"{keys_per_sec:.0f} keys/sec",
-                                "Threads": f"{num_threads} active",
-                                "ETA": eta_str
-                            })
-                    else:
-                        time.sleep(0.01)  # Brief pause if no work
-                except IndexError:
-                    time.sleep(0.01)  # Queue was empty
-                except Exception as e:
-                    monitor.log(f"  ❌ Thread {thread_id} error: {e}")
-            
-            return local_processed
-        
-        # Flag to signal when generator is exhausted
-        generator_done = threading.Event()
-        
-        # Start worker threads
-        with ThreadPoolExecutor(max_workers=num_threads) as executor:
-            # Submit workers
-            futures = []
-            for i in range(num_threads):
-                future = executor.submit(worker, i, client_pool[i])
-                futures.append(future)
-            
-            # Feed work queue from generator
-            try:
-                for batch in generator:
-                    while len(work_queue) > num_threads * 3:  # Prevent queue overflow
-                        time.sleep(0.1)
-                    work_queue.append((batch_id, batch))
-                    batch_id += 1
-            finally:
-                generator_done.set()
-            
-            # Wait for completion
-            total_thread_processed = 0
-            for future in futures:
-                try:
-                    count = future.result()
-                    total_thread_processed += count
-                except Exception as e:
-                    monitor.log(f"  ❌ Worker failed: {e}")
-        
-        insertion_time = time.time() - insertion_start
-        final_count = keys_processed.get()
-        rate = final_count / insertion_time if insertion_time > 0 else 0
-        
-        monitor.log(f"  ✓ Insertion complete: {final_count:,} keys in {insertion_time:.1f}s ({rate:.0f} keys/sec)")
-        return insertion_time
+    def verify_server_connection(self, client: Valkey) -> bool:
+        """Verify that the server is responding"""
+        try:
+            client.ping()
+            return True
+        except Exception as e:
+            logging.info(f"❌ Server connection failed: {e}")
+            return False
     
     def wait_for_indexing(self, client: Valkey, index_name: str, expected_docs: int, 
                          monitor: ProgressMonitor, timeout: int = 300):
-        """Wait for indexing to complete with progress monitoring"""
+        """Wait for indexing to complete with detailed progress monitoring"""
         start_time = time.time()
+        last_report_time = start_time
         last_doc_count = 0
         
         monitor.log(f"    Starting search index creation for {expected_docs:,} documents...")
         
         while time.time() - start_time < timeout:
+            # Get index info to check indexing status
             info = client.execute_command("FT.INFO", index_name)
             info_dict = {}
             for i in range(0, len(info), 2):
                 key = info[i].decode() if isinstance(info[i], bytes) else str(info[i])
                 value = info[i+1]
                 if isinstance(value, bytes):
-                    value = value.decode()
+                    try:
+                        value = value.decode()
+                    except:
+                        pass
                 info_dict[key] = value
             
             num_docs = int(info_dict.get('num_docs', 0))
-            mutation_queue = int(info_dict.get('mutation_queue_size', 0))
+            mutation_queue_size = int(info_dict.get('mutation_queue_size', 0))
             backfill_in_progress = int(info_dict.get('backfill_in_progress', 0))
             backfill_complete_percent = float(info_dict.get('backfill_complete_percent', 0.0))
             state = info_dict.get('state', 'unknown')
             
             # Index is still processing if there are mutations in queue or backfill in progress
-            indexing = mutation_queue > 0 or backfill_in_progress > 0
+            indexing = mutation_queue_size > 0 or backfill_in_progress > 0
             
-            # Update monitor status for background thread to report
-            elapsed = time.time() - start_time
-            docs_per_sec = num_docs / elapsed if elapsed > 0 else 0
-            eta = (expected_docs - num_docs) / docs_per_sec if docs_per_sec > 0 and num_docs < expected_docs else 0
-            eta_str = f"{eta/60:.1f}m" if eta > 60 else f"{eta:.0f}s"
+            # Get memory info
+            memory_info = client.info("memory")
+            current_memory_kb = memory_info['used_memory'] // 1024
             
-            status_msg = f"State: {state}"
-            if mutation_queue > 0:
-                status_msg += f", Queue: {mutation_queue}"
-            if backfill_in_progress > 0:
-                status_msg += f", Backfill: {backfill_complete_percent:.1f}%"
+            # Calculate indexing rate
+            current_time = time.time()
+            elapsed = current_time - start_time
             
-            monitor.update_status({
-                "Phase": "Indexing",
-                "Progress": f"{num_docs:,}/{expected_docs:,} ({num_docs/expected_docs*100:.1f}%)",
-                "Speed": f"{docs_per_sec:.0f} docs/sec",
-                "Status": status_msg,
-                "ETA": eta_str
-            })
+            # Report progress every 5 seconds or when significant progress is made
+            doc_progress = num_docs - last_doc_count
+            time_since_report = current_time - last_report_time
             
+            if time_since_report >= 5 or doc_progress >= expected_docs * 0.05:  # Every 5% progress
+                progress_pct = (num_docs / expected_docs * 100) if expected_docs > 0 else 0
+                docs_per_sec = num_docs / elapsed if elapsed > 0 else 0
+                
+                eta_seconds = (expected_docs - num_docs) / docs_per_sec if docs_per_sec > 0 and num_docs < expected_docs else 0
+                eta_str = f"{eta_seconds/60:.1f}m" if eta_seconds > 60 else f"{eta_seconds:.0f}s"
+                
+                status = f"State: {state}"
+                if mutation_queue_size > 0:
+                    status += f", Queue: {mutation_queue_size}"
+                if backfill_in_progress > 0:
+                    status += f", Backfill: {backfill_complete_percent:.1f}%"
+                
+                logging.info(f"    Search Index: {num_docs:,}/{expected_docs:,} docs ({progress_pct:.1f}%) | "
+                        f"{docs_per_sec:.0f} docs/sec | Memory: {current_memory_kb:,} KB | "
+                        f"{status} | ETA: {eta_str}")
+                sys.stdout.flush()  # Ensure immediate output
+                
+                last_report_time = current_time
+                last_doc_count = num_docs
+            
+            # Check if indexing is complete - all docs indexed and no pending operations
             if num_docs >= expected_docs and not indexing and state == "ready":
                 total_time = time.time() - start_time
                 avg_docs_per_sec = num_docs / total_time if total_time > 0 else 0
-                monitor.log(f"    ✓ Search indexing complete: {num_docs:,} docs indexed in {total_time:.1f}s "
-                           f"(avg {avg_docs_per_sec:.0f} docs/sec)")
+                logging.info(f"    ✓ Search indexing complete: {num_docs:,} docs indexed in {total_time:.1f}s "
+                        f"(avg {avg_docs_per_sec:.0f} docs/sec)")
+                logging.info(f"    ✓ Final memory usage: {current_memory_kb:,} KB")
+                logging.info(f"    ✓ Index state: {state}, queue: {mutation_queue_size}, backfill: {backfill_complete_percent:.1f}%")
+                sys.stdout.flush()  # Ensure immediate output
                 return
                 
-            time.sleep(1)
+            time.sleep(1)  # Check every 1 second for more responsive monitoring
         
-        monitor.log(f"    ⚠ Indexing timeout after {timeout}s")
+        logging.info(f"    ⚠ Warning: Indexing timeout after {timeout}s, proceeding anyway")
+        sys.stdout.flush()  # Ensure immediate output
     
     def run_benchmark_scenario(self, scenario: BenchmarkScenario) -> Dict:
-        """Run a single benchmark scenario"""
+        """Run a single benchmark scenario with full monitoring"""
         monitor = ProgressMonitor(self.server, scenario.name)
         monitor.start()
         
-        # Get clients
+        # Get main client
         client = self.server.get_new_client()
-        client.flushall()
-        time.sleep(1)
-        
-        # Measure baseline
-        baseline_memory = client.info("memory")['used_memory']
-        monitor.log(f"  Baseline memory: {baseline_memory // 1024:,} KB")
-        
-        # Create schema and generator
-        index_name = f"idx_{scenario.name.lower().replace(' ', '_')}"
-        schema = self.create_schema(index_name)
-        
-        config = HashGeneratorConfig(
-            num_keys=scenario.total_keys,
-            schema=schema,
-            tags_config=scenario.tags_config,
-            key_length=LengthConfig(avg=16, min=16, max=16),  # Fixed length keys
-            batch_size=1000,
-            seed=42
-        )
-        
-        generator = HashKeyGenerator(config)
-        
-        # Calculate data size
-        monitor.log(f"  Generating {scenario.total_keys:,} keys with {scenario.description}")
-        
-        # Create client pool for parallel insertion
-        num_threads = min(8, max(2, scenario.total_keys // 50000))
-        client_pool = [self.server.get_new_client() for _ in range(num_threads)]
         
         try:
-            # Insert data
-            insertion_time = self.insert_data_parallel(generator, client_pool, monitor, 
-                                                      scenario.total_keys)
+            # Verify server connection
+            if not self.verify_server_connection(client):
+                monitor.stop()
+                raise RuntimeError(f"Failed to connect to valkey server for scenario {scenario.name}")
+            
+            # Clean up any existing data
+            client.flushall()
+            time.sleep(1)
+            
+            # Measure baseline
+            baseline_memory = client.info("memory")['used_memory']
+            monitor.log(f"  Baseline memory: {baseline_memory // 1024:,} KB")
+            
+            # Create schema and generator
+            index_name = f"idx_{scenario.name.lower().replace(' ', '_')}"
+            schema = self.create_schema(index_name)
+            
+            config = HashGeneratorConfig(
+                num_keys=scenario.total_keys,
+                schema=schema,
+                tags_config=scenario.tags_config,
+                key_length=LengthConfig(avg=16, min=16, max=16),  # Fixed length keys
+                batch_size=max(500, min(2000, scenario.total_keys // 20)),  # Optimize batch size
+                seed=42
+            )
+            
+            generator = HashKeyGenerator(config)
+            
+            # Calculate data generation and insertion
+            monitor.log(f"  Generating {scenario.total_keys:,} keys with {scenario.description}")
+            
+            # Create client pool for parallel insertion
+            num_threads = min(8, max(2, scenario.total_keys // 50000))
+            client_pool = ClientPool(self.server, num_threads)
+            
+            # Insert data using generator with parallel processing
+            insertion_start_time = time.time()
+            keys_processed = ThreadSafeCounter(0)
+            
+            # Process batches with thread pool
+            def process_batch(batch_data: List[Tuple[str, Dict[str, Any]]], thread_id: int) -> Tuple[int, float]:
+                """Process a batch of keys in a worker thread"""
+                thread_client = client_pool.get_client_for_thread(thread_id)
+                
+                batch_start = time.time()
+                pipe = thread_client.pipeline(transaction=False)
+                
+                for key, fields in batch_data:
+                    pipe.hset(key, mapping=fields)
+                
+                pipe.execute()
+                batch_time = time.time() - batch_start
+                
+                # Update progress counter
+                processed_count = keys_processed.increment(len(batch_data))
+                
+                # Update monitor status periodically
+                if processed_count % (config.batch_size * 5) == 0 or processed_count >= scenario.total_keys:
+                    current_time = time.time()
+                    elapsed_time = current_time - insertion_start_time
+                    progress_pct = (processed_count / scenario.total_keys) * 100
+                    keys_per_sec = processed_count / elapsed_time if elapsed_time > 0 else 0
+                    
+                    eta_seconds = (scenario.total_keys - processed_count) / keys_per_sec if keys_per_sec > 0 else 0
+                    eta_str = f"{eta_seconds/60:.1f}m" if eta_seconds > 60 else f"{eta_seconds:.0f}s"
+                    
+                    monitor.update_status({
+                        "Phase": "Insertion",
+                        "Progress": f"{processed_count:,}/{scenario.total_keys:,} ({progress_pct:.1f}%)",
+                        "Speed": f"{keys_per_sec:.0f} keys/sec",
+                        "Threads": f"{num_threads} active",
+                        "ETA": eta_str
+                    })
+                
+                return len(batch_data), batch_time
+            
+            # Execute parallel insertion
+            monitor.log(f"  Starting data ingestion: {scenario.total_keys:,} keys using {num_threads} threads")
+            
+            with ThreadPoolExecutor(max_workers=num_threads, thread_name_prefix="ValKeyIngest") as executor:
+                futures = []
+                batch_id = 0
+                
+                for batch in generator:
+                    future = executor.submit(process_batch, batch, batch_id % num_threads)
+                    futures.append(future)
+                    batch_id += 1
+                
+                # Wait for all batches to complete
+                completed_batches = 0
+                for future in as_completed(futures):
+                    try:
+                        batch_keys, batch_time = future.result()
+                        completed_batches += 1
+                    except Exception as e:
+                        monitor.log(f"  ❌ Batch failed: {e}")
+            
+            insertion_time = time.time() - insertion_start_time
+            total_keys_inserted = keys_processed.get()
+            monitor.log(f"  ✓ Data insertion complete: {total_keys_inserted:,} keys in {insertion_time:.1f}s "
+                       f"({total_keys_inserted/insertion_time:.0f} keys/sec) using {num_threads} threads")
             
             # Measure memory after data insertion
             data_memory = client.info("memory")['used_memory']
             data_memory_kb = (data_memory - baseline_memory) // 1024
-            monitor.log(f"  Data memory: {data_memory_kb:,} KB")
+            monitor.log(f"  Valkey data memory (no index): {data_memory_kb:,} KB")
             
             # Create index
-            monitor.log(f"  Creating index '{index_name}'")
-            monitor.set_index_name(index_name)  # Tell monitor to track this index
+            monitor.log(f"  Creating index '{index_name}' and waiting for indexing...")
+            monitor.set_index_name(index_name)
+            
             cmd = generator.generate_ft_create_command()
             client.execute_command(*cmd.split())
             
@@ -482,14 +584,10 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             
             # Clear index monitoring
             monitor.clear_index_names()
-                
+            
         finally:
-            # Close client pool
-            for c in client_pool:
-                try:
-                    c.close()
-                except:
-                    pass
+            # Clean up resources
+            client_pool.close_all()
             monitor.stop()
         
         return result
@@ -616,8 +714,8 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 total_keys=base_keys,
                 tags_config=TagsConfig(
                     num_keys=base_keys,
-                    tags_per_key=TagDistribution(avg=5, min=1, max=20, distribution=dist),
-                    tag_length=LengthConfig(avg=20, min=10, max=30),
+                    tags_per_key=TagDistribution(avg=50, min=1, max=1000, distribution=dist),
+                    tag_length=LengthConfig(avg=40, min=10, max=300),
                     sharing=TagSharingConfig(mode=TagSharingMode.SHARED_POOL, pool_size=5000)
                 ),
                 description=f"{dist.value} distribution of tags per key"
@@ -631,7 +729,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         logging.info("Testing various tag sharing patterns and configurations\n")
         
         # Create scenarios
-        scenarios = self.create_comprehensive_scenarios(base_keys=100000)
+        scenarios = self.create_comprehensive_scenarios(base_keys=10000000)
         results = []
         
         # Run each scenario
