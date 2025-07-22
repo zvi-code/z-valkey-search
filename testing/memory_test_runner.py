@@ -32,7 +32,14 @@ def run_memory_benchmark():
         return
     
     # Run the test from the correct test directory
-    test_cmd = ["./.build-release/tests/memory_benchmark_test", "--gtest_filter=*ComprehensiveMemoryAnalysis*"]
+    # Use QuickMemoryValidation for faster testing, or ComprehensiveMemoryAnalysis for full analysis
+    test_filter = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] in ["--quick", "--full"] else "--quick"
+    if test_filter == "--quick":
+        test_cmd = ["./.build-release/tests/memory_benchmark_test", "--gtest_filter=*QuickMemoryValidation*"]
+        print("Running quick validation test (100K keys)")
+    else:
+        test_cmd = ["./.build-release/tests/memory_benchmark_test", "--gtest_filter=*ComprehensiveMemoryAnalysis*"]
+        print("Running comprehensive analysis (10M keys) - this will take several minutes")
     try:
         result = subprocess.run(test_cmd, capture_output=True, text=True, check=True)
         print("Test execution successful")
@@ -71,14 +78,8 @@ def analyze_results(csv_file):
         print("\n=== Summary Statistics ===")
         print(df[['MemoryKB', 'RawDataKB', 'OverheadFactor']].describe())
         
-        # Print detailed comparison with theoretical analysis
-        print("\n=== Detailed Results Analysis ===")
-        for _, row in df.iterrows():
-            scenario = row['Scenario']
-            actual_overhead = row['OverheadFactor']
-            memory_kb = row['MemoryKB'] 
-            raw_data_kb = row['RawDataKB']
-            print(f"{scenario:20s}: {memory_kb:>6.0f} KB index vs {raw_data_kb:>6.0f} KB raw = {actual_overhead:.2f}x overhead")
+        # Analyze results by category
+        analyze_by_category(df)
         
         # Try to create visualizations
         try:
@@ -91,6 +92,81 @@ def analyze_results(csv_file):
         print(f"Error analyzing results: {e}")
         import traceback
         traceback.print_exc()
+
+def analyze_by_category(df):
+    """Analyze results by different test categories"""
+    print("\n=== Analysis by Test Category ===")
+    
+    # Group by test type based on scenario name patterns
+    categories = {
+        'UniqueTags': df[df['Scenario'].str.contains('UniqueTags_', na=False)],
+        'TagLength': df[df['Scenario'].str.contains('TagLen_', na=False)],
+        'TagsPerKey': df[df['Scenario'].str.contains('TagsPerKey_', na=False)],
+        'FreqDist': df[df['Scenario'].str.contains('FreqDist_', na=False)],
+        'Extreme': df[df['Scenario'].str.contains('Extreme_', na=False)],
+        'Quick': df[df['Scenario'].str.contains('Quick_', na=False)]
+    }
+    
+    for category_name, category_df in categories.items():
+        if len(category_df) > 0:
+            print(f"\n--- {category_name} Analysis ---")
+            
+            if category_name == 'UniqueTags':
+                # Extract unique tag counts from scenario names
+                category_df = category_df.copy()
+                category_df['UniqueTagCount'] = category_df['Scenario'].str.extract(r'UniqueTags_(\d+)').astype(int)
+                category_df = category_df.sort_values('UniqueTagCount')
+                print("Impact of Number of Unique Tags:")
+                print("UniqueTags | MemoryKB | Overhead | Memory/UniqueTag")
+                print("-" * 50)
+                for _, row in category_df.iterrows():
+                    unique_count = row['UniqueTagCount']
+                    memory_kb = row['MemoryKB']
+                    overhead = row['OverheadFactor']
+                    memory_per_tag = memory_kb / unique_count if unique_count > 0 else 0
+                    print(f"{unique_count:>9d} | {memory_kb:>7.0f} | {overhead:>7.2f}x | {memory_per_tag:>13.3f} KB")
+                    
+            elif category_name == 'TagLength':
+                # Extract tag lengths from scenario names
+                category_df = category_df.copy()
+                category_df['TagLength'] = category_df['Scenario'].str.extract(r'TagLen_(\d+)').astype(int)
+                category_df = category_df.sort_values('TagLength')
+                print("Impact of Tag Length:")
+                print("TagLength | MemoryKB | Overhead | Memory/Byte")
+                print("-" * 45)
+                for _, row in category_df.iterrows():
+                    tag_len = row['TagLength']
+                    memory_kb = row['MemoryKB']
+                    overhead = row['OverheadFactor']
+                    memory_per_byte = memory_kb / (tag_len * row['UniqueTags']) if tag_len > 0 else 0
+                    print(f"{tag_len:>8d}B | {memory_kb:>7.0f} | {overhead:>7.2f}x | {memory_per_byte:>10.6f} KB")
+                    
+            elif category_name == 'TagsPerKey':
+                # Extract tags per key from scenario names
+                category_df = category_df.copy()
+                category_df['ExtractedTPK'] = category_df['Scenario'].str.extract(r'TagsPerKey_(\d+)').astype(int)
+                category_df = category_df.sort_values('ExtractedTPK')
+                print("Impact of Tags Per Key:")
+                print("Tags/Key | MemoryKB | Overhead | Memory/Tag/Key")
+                print("-" * 48)
+                for _, row in category_df.iterrows():
+                    tpk = row['ExtractedTPK']
+                    memory_kb = row['MemoryKB']
+                    overhead = row['OverheadFactor']
+                    keys = row['Keys']
+                    memory_per_tag_key = memory_kb / (tpk * keys) if tpk > 0 and keys > 0 else 0
+                    print(f"{tpk:>7d}  | {memory_kb:>7.0f} | {overhead:>7.2f}x | {memory_per_tag_key:>13.6f} KB")
+            
+            else:
+                # Generic analysis for other categories
+                print("Scenario | MemoryKB | Overhead | Efficiency")
+                print("-" * 50)
+                for _, row in category_df.iterrows():
+                    scenario = row['Scenario'].replace(category_name + '_', '')[:15]
+                    memory_kb = row['MemoryKB']
+                    overhead = row['OverheadFactor']
+                    efficiency = "Good" if overhead < 2 else "Fair" if overhead < 5 else "Poor"
+                    print(f"{scenario:>14s} | {memory_kb:>7.0f} | {overhead:>7.2f}x | {efficiency:>9s}")
 
 def create_visualizations(df):
     """Create visualizations with error handling"""

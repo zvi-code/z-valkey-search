@@ -152,41 +152,108 @@ class MemoryBenchmarkTest : public vmsdk::ValkeyTest {
     double overhead_factor;
   };
 
-  BenchmarkResult RunScenario(const std::string& name,
-                             const std::vector<std::string>& tag_patterns,
-                             int keys_per_tag,
-                             int tags_per_key) {
+  // Generate a key with fixed length (64 bytes)
+  std::string GenerateFixedLengthKey(int id) {
+    std::string key = "key_" + std::to_string(id);
+    // Pad to 64 bytes
+    while (key.length() < 64) {
+      key += "_padding";
+    }
+    return key.substr(0, 64);  // Ensure exactly 64 bytes
+  }
+  
+  // Generate tags with frequency distribution
+  std::vector<std::pair<std::string, double>> GenerateTagsWithFrequency(
+      int num_unique_tags, int avg_tag_length, const std::string& prefix = "tag") {
+    std::vector<std::pair<std::string, double>> tags_with_freq;
+    
+    // Generate different frequency tiers
+    int high_freq_count = std::max(1, num_unique_tags / 20);  // 5% are high frequency (50% of keys)
+    int med_freq_count = std::max(1, num_unique_tags / 10);   // 10% are medium frequency (10% of keys)
+    int low_freq_count = std::max(1, num_unique_tags / 5);    // 20% are low frequency (1-5% of keys)
+    int rare_freq_count = num_unique_tags - high_freq_count - med_freq_count - low_freq_count; // Rest are rare (0.1% of keys)
+    
+    int tag_id = 0;
+    
+    // High frequency tags (50% of keys have them)
+    for (int i = 0; i < high_freq_count; ++i) {
+      std::string tag = prefix + "_high_freq_" + std::to_string(tag_id++);
+      while (tag.length() < avg_tag_length) tag += "_pad";
+      tags_with_freq.push_back({tag.substr(0, avg_tag_length), 0.5});
+    }
+    
+    // Medium frequency tags (10% of keys)
+    for (int i = 0; i < med_freq_count; ++i) {
+      std::string tag = prefix + "_med_freq_" + std::to_string(tag_id++);
+      while (tag.length() < avg_tag_length) tag += "_pad";
+      tags_with_freq.push_back({tag.substr(0, avg_tag_length), 0.1});
+    }
+    
+    // Low frequency tags (1-5% of keys)
+    for (int i = 0; i < low_freq_count; ++i) {
+      std::string tag = prefix + "_low_freq_" + std::to_string(tag_id++);
+      while (tag.length() < avg_tag_length) tag += "_pad";
+      double freq = 0.01 + (0.04 * i) / low_freq_count; // 1% to 5%
+      tags_with_freq.push_back({tag.substr(0, avg_tag_length), freq});
+    }
+    
+    // Rare frequency tags (0.1% of keys)
+    for (int i = 0; i < rare_freq_count; ++i) {
+      std::string tag = prefix + "_rare_" + std::to_string(tag_id++);
+      while (tag.length() < avg_tag_length) tag += "_pad";
+      tags_with_freq.push_back({tag.substr(0, avg_tag_length), 0.001});
+    }
+    
+    return tags_with_freq;
+  }
+  
+  BenchmarkResult RunAdvancedScenario(const std::string& name,
+                                     const std::vector<std::pair<std::string, double>>& tags_with_freq,
+                                     int total_keys,
+                                     int avg_tags_per_key) {
     CreateTagIndex();
     
     auto start_memory = GetMemoryUsage();
     auto start_time = std::chrono::high_resolution_clock::now();
     
-    // Calculate raw data size
     size_t raw_data_size = 0;
+    std::random_device rd;
+    std::mt19937 gen(42); // Fixed seed for reproducibility
     
     // Add records to the index
-    int key_counter = 0;
-    for (const auto& tag_pattern : tag_patterns) {
-      for (int k = 0; k < keys_per_tag; ++k) {
-        std::string key = "key" + std::to_string(++key_counter);
-        
-        // Build tag string for this key
-        std::ostringstream tag_string;
-        for (int t = 0; t < tags_per_key; ++t) {
-          if (t > 0) tag_string << ",";
-          if (t < tag_patterns.size()) {
-            tag_string << tag_patterns[t];
-          } else {
-            tag_string << tag_patterns[t % tag_patterns.size()];
-          }
+    for (int i = 0; i < total_keys; ++i) {
+      std::string key = GenerateFixedLengthKey(i);
+      std::ostringstream tag_string;
+      
+      int tags_for_this_key = 0;
+      bool first_tag = true;
+      
+      // For each tag, decide if this key should have it based on frequency
+      for (const auto& [tag, frequency] : tags_with_freq) {
+        std::uniform_real_distribution<> dis(0.0, 1.0);
+        if (dis(gen) < frequency && tags_for_this_key < avg_tags_per_key * 2) {
+          if (!first_tag) tag_string << ",";
+          tag_string << tag;
+          first_tag = false;
+          tags_for_this_key++;
         }
-        
-        auto result = tag_index_->AddRecord(key, tag_string.str());
-        EXPECT_TRUE(result.ok()) << "Failed to add record: " << result.status();
-        
-        // Calculate raw data size
-        raw_data_size += key.length() + tag_string.str().length();
       }
+      
+      // Ensure minimum tags per key
+      while (tags_for_this_key < std::max(1, avg_tags_per_key / 2)) {
+        if (!first_tag) tag_string << ",";
+        // Add a random tag from the list
+        std::uniform_int_distribution<> tag_dis(0, tags_with_freq.size() - 1);
+        tag_string << tags_with_freq[tag_dis(gen)].first;
+        first_tag = false;
+        tags_for_this_key++;
+      }
+      
+      auto result = tag_index_->AddRecord(key, tag_string.str());
+      EXPECT_TRUE(result.ok()) << "Failed to add record: " << result.status();
+      
+      // Calculate raw data size
+      raw_data_size += key.length() + tag_string.str().length();
     }
     
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -196,12 +263,12 @@ class MemoryBenchmarkTest : public vmsdk::ValkeyTest {
     
     BenchmarkResult result;
     result.scenario_name = name;
-    result.num_keys = key_counter;
-    result.num_unique_tags = tag_patterns.size();
-    result.avg_tags_per_key = tags_per_key;
-    result.avg_tag_length = tag_patterns.empty() ? 0 : 
-        std::accumulate(tag_patterns.begin(), tag_patterns.end(), 0,
-                       [](int sum, const std::string& tag) { return sum + tag.length(); }) / tag_patterns.size();
+    result.num_keys = total_keys;
+    result.num_unique_tags = tags_with_freq.size();
+    result.avg_tags_per_key = avg_tags_per_key;
+    result.avg_tag_length = tags_with_freq.empty() ? 0 : 
+        std::accumulate(tags_with_freq.begin(), tags_with_freq.end(), 0,
+                       [](int sum, const auto& pair) { return sum + pair.first.length(); }) / tags_with_freq.size();
     result.memory_before_kb = start_memory.rss_kb;
     result.memory_after_kb = end_memory.rss_kb;
     result.memory_used_kb = end_memory.rss_kb - start_memory.rss_kb;
@@ -210,6 +277,18 @@ class MemoryBenchmarkTest : public vmsdk::ValkeyTest {
     result.overhead_factor = static_cast<double>(result.memory_used_kb * 1024) / raw_data_size;
     
     return result;
+  }
+  
+  // Legacy method for backward compatibility
+  BenchmarkResult RunScenario(const std::string& name,
+                             const std::vector<std::string>& tag_patterns,
+                             int keys_per_tag,
+                             int tags_per_key) {
+    std::vector<std::pair<std::string, double>> tags_with_freq;
+    for (const auto& tag : tag_patterns) {
+      tags_with_freq.push_back({tag, 1.0 / tag_patterns.size()});
+    }
+    return RunAdvancedScenario(name, tags_with_freq, keys_per_tag * tag_patterns.size(), tags_per_key);
   }
 
   void PrintResults(const std::vector<BenchmarkResult>& results) {
@@ -263,46 +342,150 @@ class MemoryBenchmarkTest : public vmsdk::ValkeyTest {
 TEST_F(MemoryBenchmarkTest, ComprehensiveMemoryAnalysis) {
   std::vector<BenchmarkResult> results;
   
-  // Scenario 1: Short tags with high sharing (hierarchical)
-  {
-    auto tags = GenerateHierarchicalTags(100, "org:acme");
-    results.push_back(RunScenario("Short_Hierarchical", tags, 100, 5));
+  const int TOTAL_KEYS = 10000000;  // 10M keys for all tests
+  const int AVG_TAGS_PER_KEY = 8;  // Base tags per key
+  
+  std::cout << "\n=== Running Comprehensive Memory Analysis with " << TOTAL_KEYS << " keys ===\n";
+  
+  // ========== VARYING NUMBER OF UNIQUE TAGS ==========
+  std::cout << "\n--- Testing Unique Tags Impact (Fixed: 10M keys, avg 8 tags/key, 32 byte tags) ---\n";
+  
+  std::vector<int> unique_tag_counts = {1000, 5000, 10000, 50000, 100000, 500000, 1000000};
+  for (int unique_tags : unique_tag_counts) {
+    auto tags = GenerateTagsWithFrequency(unique_tags, 32, "tag");
+    results.push_back(RunAdvancedScenario("UniqueTags_" + std::to_string(unique_tags), 
+                                         tags, TOTAL_KEYS, AVG_TAGS_PER_KEY));
   }
   
-  // Scenario 2: Medium tags with moderate sharing
-  {
-    auto tags = GenerateClusteredTags(1000, 10);
-    results.push_back(RunScenario("Medium_Clustered", tags, 10, 10));
+  // ========== VARYING TAG LENGTH ==========
+  std::cout << "\n--- Testing Tag Length Impact (Fixed: 10M keys, 50K unique tags, avg 8 tags/key) ---\n";
+  
+  std::vector<int> tag_lengths = {8, 16, 32, 64, 128, 256, 512, 1024};
+  for (int tag_length : tag_lengths) {
+    auto tags = GenerateTagsWithFrequency(50000, tag_length, "len" + std::to_string(tag_length));
+    results.push_back(RunAdvancedScenario("TagLen_" + std::to_string(tag_length), 
+                                         tags, TOTAL_KEYS, AVG_TAGS_PER_KEY));
   }
   
-  // Scenario 3: Long tags with low sharing
-  {
-    auto tags = GenerateLongTags(100, 100, "metadata");
-    results.push_back(RunScenario("Long_Metadata", tags, 100, 20));
+  // ========== VARYING TAGS PER KEY ==========
+  std::cout << "\n--- Testing Tags Per Key Impact (Fixed: 10M keys, 100K unique tags, 32 byte tags) ---\n";
+  
+  std::vector<int> tags_per_key_counts = {1, 3, 5, 8, 15, 25, 40, 60};
+  for (int tags_per_key : tags_per_key_counts) {
+    auto tags = GenerateTagsWithFrequency(100000, 32, "tpk" + std::to_string(tags_per_key));
+    results.push_back(RunAdvancedScenario("TagsPerKey_" + std::to_string(tags_per_key), 
+                                         tags, TOTAL_KEYS, tags_per_key));
   }
   
-  // Scenario 4: Random tags (worst case for Patricia tree)
+  // ========== FREQUENCY DISTRIBUTION SCENARIOS ==========
+  std::cout << "\n--- Testing Frequency Distribution Impact (Fixed: 10M keys, avg 8 tags/key, 32 byte tags) ---\n";
+  
+  // High sharing scenario - fewer unique tags with more overlap
   {
-    auto tags = GenerateRandomTags(1000, 30);
-    results.push_back(RunScenario("Random_NoSharing", tags, 10, 10));
+    auto tags = GenerateTagsWithFrequency(10000, 32, "high_share");
+    results.push_back(RunAdvancedScenario("FreqDist_HighSharing", tags, TOTAL_KEYS, AVG_TAGS_PER_KEY));
   }
   
-  // Scenario 5: Very long tags (4KB) with high sharing
+  // Medium sharing scenario - balanced distribution  
   {
-    auto tags = GenerateLongTags(10, 4096, "4kb");
-    results.push_back(RunScenario("VeryLong_4KB", tags, 1000, 10));
+    auto tags = GenerateTagsWithFrequency(100000, 32, "med_share");
+    results.push_back(RunAdvancedScenario("FreqDist_MediumSharing", tags, TOTAL_KEYS, AVG_TAGS_PER_KEY));
   }
   
-  // Scenario 6: Many short tags per key
+  // Low sharing scenario - many unique tags with little overlap
   {
-    auto tags = GenerateRandomTags(500, 10);
-    results.push_back(RunScenario("ManyShort_Tags", tags, 20, 50));
+    auto tags = GenerateTagsWithFrequency(500000, 32, "low_share");
+    results.push_back(RunAdvancedScenario("FreqDist_LowSharing", tags, TOTAL_KEYS, AVG_TAGS_PER_KEY));
   }
   
-  // Scenario 7: Sparse tags (each tag used by few keys)
+  // Extreme high frequency scenario - very few tags used by most keys
   {
-    auto tags = GenerateRandomTags(5000, 25);
-    results.push_back(RunScenario("Sparse_Tags", tags, 2, 8));
+    std::vector<std::pair<std::string, double>> extreme_high_freq;
+    for (int i = 0; i < 100; ++i) {
+      std::string tag = "extreme_freq_tag_" + std::to_string(i);
+      while (tag.length() < 32) tag += "_pad";
+      extreme_high_freq.push_back({tag.substr(0, 32), 0.8});  // 80% of keys have each tag
+    }
+    results.push_back(RunAdvancedScenario("FreqDist_ExtremeHighFreq", extreme_high_freq, TOTAL_KEYS, 10));
+  }
+  
+  // Zipf-like distribution scenario - power law distribution
+  {
+    std::vector<std::pair<std::string, double>> zipf_tags;
+    for (int i = 0; i < 50000; ++i) {
+      std::string tag = "zipf_tag_" + std::to_string(i);
+      while (tag.length() < 32) tag += "_pad";
+      // Zipf distribution: frequency proportional to 1/rank
+      double frequency = std::min(0.7, 1.0 / (i + 1));
+      zipf_tags.push_back({tag.substr(0, 32), frequency});
+    }
+    results.push_back(RunAdvancedScenario("FreqDist_ZipfLike", zipf_tags, TOTAL_KEYS, AVG_TAGS_PER_KEY));
+  }
+  
+  // ========== EXTREME SCENARIOS ==========
+  std::cout << "\n--- Testing Extreme Scenarios ---\n";
+  
+  // Maximum unique tags scenario
+  {
+    auto tags = GenerateTagsWithFrequency(2000000, 16, "max_unique");
+    results.push_back(RunAdvancedScenario("Extreme_MaxUnique", tags, TOTAL_KEYS, 5));
+  }
+  
+  // Maximum tag length scenario
+  {
+    auto tags = GenerateTagsWithFrequency(10000, 2048, "max_len");
+    results.push_back(RunAdvancedScenario("Extreme_MaxLength", tags, TOTAL_KEYS, 4));
+  }
+  
+  // Maximum tags per key scenario
+  {
+    auto tags = GenerateTagsWithFrequency(50000, 24, "max_tpk");
+    results.push_back(RunAdvancedScenario("Extreme_MaxTagsPerKey", tags, TOTAL_KEYS, 100));
+  }
+  
+  // Minimum scenario - baseline
+  {
+    auto tags = GenerateTagsWithFrequency(100, 8, "min");
+    results.push_back(RunAdvancedScenario("Extreme_Minimal", tags, TOTAL_KEYS, 1));
+  }
+  
+  PrintResults(results);
+}
+
+// Smaller test for quick validation with 100K keys
+TEST_F(MemoryBenchmarkTest, QuickMemoryValidation) {
+  std::vector<BenchmarkResult> results;
+  
+  const int TOTAL_KEYS = 100000;  // 100K keys for quick tests
+  const int AVG_TAGS_PER_KEY = 8;
+  
+  std::cout << "\n=== Quick Validation with " << TOTAL_KEYS << " keys ===\n";
+  
+  // Test varying unique tags
+  std::vector<int> unique_tag_counts = {1000, 10000, 50000};
+  for (int unique_tags : unique_tag_counts) {
+    auto tags = GenerateTagsWithFrequency(unique_tags, 32, "tag");
+    results.push_back(RunAdvancedScenario("Quick_UniqueTags_" + std::to_string(unique_tags), 
+                                         tags, TOTAL_KEYS, AVG_TAGS_PER_KEY));
+  }
+  
+  // Test varying tag lengths
+  std::vector<int> tag_lengths = {16, 64, 256};
+  for (int tag_length : tag_lengths) {
+    auto tags = GenerateTagsWithFrequency(10000, tag_length, "len" + std::to_string(tag_length));
+    results.push_back(RunAdvancedScenario("Quick_TagLen_" + std::to_string(tag_length), 
+                                         tags, TOTAL_KEYS, AVG_TAGS_PER_KEY));
+  }
+  
+  // Test frequency distributions
+  {
+    auto tags = GenerateTagsWithFrequency(5000, 32, "high_freq");
+    results.push_back(RunAdvancedScenario("Quick_HighFreq", tags, TOTAL_KEYS, AVG_TAGS_PER_KEY));
+  }
+  
+  {
+    auto tags = GenerateTagsWithFrequency(50000, 32, "low_freq");
+    results.push_back(RunAdvancedScenario("Quick_LowFreq", tags, TOTAL_KEYS, AVG_TAGS_PER_KEY));
   }
   
   PrintResults(results);
