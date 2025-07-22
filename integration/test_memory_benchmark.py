@@ -9,9 +9,12 @@ from typing import Dict, List, Tuple, Optional, Set
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from valkey import Valkey, ResponseError
+import time
+from valkeytestframework.util.waiters import *
+from valkey import ResponseError
+from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
-
+from valkeytestframework.conftest import resource_port_tracker
 # Optional dependencies for analysis
 try:
     import pandas as pd
@@ -20,6 +23,45 @@ try:
 except ImportError:
     assert False, "Pandas and Matplotlib are required for analysis but not installed."
 
+def process_batch(batch_data, thread_id):
+    """Process a batch of keys in a worker thread"""
+    thread_client = None
+    # try:
+    # Get a client from the pool
+    thread_client = self.server.get_new_client()
+    
+    batch_start = time.time()
+    pipe = thread_client.pipeline()
+    
+    for key, tag_string in batch_data:
+        pipe.hset(key, mapping={"tags": tag_string, "vector": dummy_vector})
+    
+    pipe.execute()
+    batch_time = time.time() - batch_start
+    
+    # Update progress counter
+    processed_count = keys_processed.increment(len(batch_data))
+    
+    # Only update monitor status occasionally to avoid contention
+    if processed_count % (batch_size * 5) == 0 or processed_count >= total_keys:
+        current_time = time.time()
+        elapsed_time = current_time - insertion_start_time
+        progress_pct = (processed_count / total_keys) * 100
+        keys_per_sec = processed_count / elapsed_time if elapsed_time > 0 else 0
+        
+        eta_seconds = (total_keys - processed_count) / keys_per_sec if keys_per_sec > 0 else 0
+        eta_str = f"{eta_seconds/60:.1f}m" if eta_seconds > 60 else f"{eta_seconds:.0f}s"
+        
+        # Update monitor with latest stats (monitor thread will query Valkey directly for index state)
+        monitor.update_status({
+            "Phase": "Insertion",
+            "Progress": f"{processed_count:,}/{total_keys:,} ({progress_pct:.1f}%)",
+            "Speed": f"{keys_per_sec:.0f} keys/sec",
+            "Threads": f"{num_threads} active",
+            "ETA": eta_str
+        })
+    
+    return len(batch_data), batch_time
 
 class ClientPool:
     """Thread-indexed pool of Valkey clients for multi-threaded operations"""
@@ -159,7 +201,7 @@ class ProgressMonitor:
         logging.info(f"🔄 ZZZZZZZZZZZZZZZZZZ")
         while self.running:
             try:
-                logging.info(f"🔄 ZZZZZZZZZZZZZZZZZZ")
+                logging.info(f"🔄 222222\nZZZZZZZZZZZZZZZZZZ")
                 current_time = time.time()
                 elapsed = current_time - self.start_time
                 
@@ -449,48 +491,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 with self.lock:
                     return self.value
             
-        keys_processed = ThreadSafeCounter(0)
-        
-        def process_batch(batch_data, thread_id):
-            """Process a batch of keys in a worker thread"""
-            thread_client = None
-            # try:
-            # Get a client from the pool
-            thread_client = self.server.get_new_client()
-            
-            batch_start = time.time()
-            pipe = thread_client.pipeline()
-            
-            for key, tag_string in batch_data:
-                pipe.hset(key, mapping={"tags": tag_string, "vector": dummy_vector})
-            
-            pipe.execute()
-            batch_time = time.time() - batch_start
-            
-            # Update progress counter
-            processed_count = keys_processed.increment(len(batch_data))
-            
-            # Only update monitor status occasionally to avoid contention
-            if processed_count % (batch_size * 5) == 0 or processed_count >= total_keys:
-                current_time = time.time()
-                elapsed_time = current_time - insertion_start_time
-                progress_pct = (processed_count / total_keys) * 100
-                keys_per_sec = processed_count / elapsed_time if elapsed_time > 0 else 0
-                
-                eta_seconds = (total_keys - processed_count) / keys_per_sec if keys_per_sec > 0 else 0
-                eta_str = f"{eta_seconds/60:.1f}m" if eta_seconds > 60 else f"{eta_seconds:.0f}s"
-                
-                # Update monitor with latest stats (monitor thread will query Valkey directly for index state)
-                monitor.update_status({
-                    "Phase": "Insertion",
-                    "Progress": f"{processed_count:,}/{total_keys:,} ({progress_pct:.1f}%)",
-                    "Speed": f"{keys_per_sec:.0f} keys/sec",
-                    "Threads": f"{num_threads} active",
-                    "ETA": eta_str
-                })
-            
-            return len(batch_data), batch_time
-            
+        keys_processed = ThreadSafeCounter(0)                    
         
         # Split keys_and_tags into batches for threading
         batches = []
@@ -845,6 +846,242 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         total_keys = 1000000
         num_threads = min(8, max(4, total_keys // 100000))  # 4-8 threads for 1M keys
         
+        # Get main client for setup
+        client = self.server.get_new_client()
+        
+        # Start monitoring
+        monitor = ProgressMonitor(self.server, "Million Key Memory Tracking")
+        monitor.start()
+        monitor.log(f"Processing {total_keys:,} keys with {num_threads} threads")
+        
+        # Verify connection
+        if not self.verify_server_connection(client):
+            monitor.stop()
+            raise RuntimeError("Failed to connect to valkey server")
+        
+        # Clean up existing data
+        client.flushall()
+        time.sleep(1)
+        
+        # Measure baseline
+        baseline_memory = client.info("memory")
+        baseline_used = baseline_memory['used_memory']
+        monitor.log(f"Baseline memory: {baseline_used // 1024:,} KB")
+        
+        # Generate test data - high variety tags for memory stress testing
+        tags_with_freq = self.generate_tags_with_frequency(50000, 32, "stress_tag")
+        monitor.log(f"Generated {len(tags_with_freq):,} unique tags with realistic frequency distribution")
+        
+        # Phase 1: Insert raw data with parallel threads
+        monitor.log("Phase 1: Parallel data insertion")
+        insertion_start = time.time()
+        
+        # Create all key-tag combinations (reusing working logic from run_isolated_memory_scenario)
+        dummy_vector = struct.pack('<8f', *[0.1] * 8)  # 8-dimensional vector
+        keys_and_tags = []
+        
+        # Generate data (same pattern as working tests)
+        for i in range(total_keys):
+            key = self.generate_fixed_length_key(i)
+            
+            # Select tags based on frequency
+            selected_tags = []
+            for tag, frequency in tags_with_freq:
+                if random.random() < frequency and len(selected_tags) < 16:
+                    selected_tags.append(tag)
+            
+            # Ensure minimum tags
+            while len(selected_tags) < 4:
+                tag, _ = random.choice(tags_with_freq)
+                if tag not in selected_tags:
+                    selected_tags.append(tag)
+            
+            tag_string = ",".join(selected_tags[:12])  # Max 12 tags per key
+            keys_and_tags.append((key, tag_string))
+        
+        monitor.log(f"✓ Data generation complete: {total_keys:,} keys")
+        
+        # Insert using thread pool (reusing working pattern from run_isolated_memory_scenario)
+        batch_size = max(500, min(2000, total_keys // (num_threads * 10)))
+        monitor.log(f"Using batch size: {batch_size:,} keys per batch")
+        
+        # Thread-safe counter (same as working test)
+        class ThreadSafeCounter:
+            def __init__(self, initial_value=0):
+                self.value = initial_value
+                self.lock = threading.Lock()
+            
+            def increment(self, delta=1):
+                with self.lock:
+                    self.value += delta
+                    return self.value
+            
+            def get(self):
+                with self.lock:
+                    return self.value
+        
+        keys_processed = ThreadSafeCounter(0)
+        
+        # def process_batch(batch_data, thread_id):
+        #     """Process a batch of keys in a worker thread (same pattern as working test)"""
+        #     thread_client = None
+        #     try:
+        #         # Get a new client for this thread
+        #         thread_client = self.server.get_new_client()
+                
+        #         batch_start = time.time()
+        #         pipe = thread_client.pipeline()
+                
+        #         for key, tag_string in batch_data:
+        #             pipe.hset(key, mapping={"tags": tag_string, "vector": dummy_vector})
+                
+        #         pipe.execute()
+        #         batch_time = time.time() - batch_start
+                
+        #         # Update progress counter
+        #         processed_count = keys_processed.increment(len(batch_data))
+                
+        #         # Update monitor status occasionally
+        #         if processed_count % (batch_size * 5) == 0 or processed_count >= total_keys:
+        #             current_time = time.time()
+        #             elapsed_time = current_time - insertion_start
+        #             progress_pct = (processed_count / total_keys) * 100
+        #             keys_per_sec = processed_count / elapsed_time if elapsed_time > 0 else 0
+                    
+        #             eta_seconds = (total_keys - processed_count) / keys_per_sec if keys_per_sec > 0 else 0
+        #             eta_str = f"{eta_seconds/60:.1f}m" if eta_seconds > 60 else f"{eta_seconds:.0f}s"
+                    
+        #             monitor.update_status({
+        #                 "Phase": "Data Insertion",
+        #                 "Progress": f"{processed_count:,}/{total_keys:,} ({progress_pct:.1f}%)",
+        #                 "Speed": f"{keys_per_sec:.0f} keys/sec",
+        #                 "Threads": f"{num_threads} active",
+        #                 "ETA": eta_str
+        #             })
+                
+        #         return len(batch_data), batch_time
+                
+        #     except Exception as e:
+        #         monitor.log(f"❌ Thread {thread_id} batch error: {e}")
+        #         raise
+        
+        # Split keys_and_tags into batches
+        batches = []
+        for i in range(0, len(keys_and_tags), batch_size):
+            batch = keys_and_tags[i:i+batch_size]
+            batches.append(batch)
+        
+        # Process batches using ThreadPoolExecutor (same pattern as working test)
+        completed_batches = 0
+        total_batches = len(batches)
+        
+        with ThreadPoolExecutor(max_workers=num_threads, thread_name_prefix="MillionKeyInsert") as executor:
+            # Submit all batches
+            future_to_batch = {}
+            for batch_idx, batch in enumerate(batches):
+                future = executor.submit(process_batch, batch, batch_idx)
+                future_to_batch[future] = batch_idx
+            
+            # Process completed batches
+            for future in as_completed(future_to_batch):
+                batch_idx = future_to_batch[future]
+                try:
+                    batch_keys_processed, batch_time = future.result()
+                    completed_batches += 1
+                    
+                    # Periodic progress logging
+                    if completed_batches % max(1, total_batches // 10) == 0 or completed_batches % 50 == 0:
+                        batch_progress_pct = (completed_batches / total_batches) * 100
+                        current_keys = keys_processed.get()
+                        monitor.log(f"    Batch progress: {completed_batches}/{total_batches} ({batch_progress_pct:.1f}%) | Keys: {current_keys:,}")
+                        
+                except Exception as e:
+                    monitor.log(f"  ❌ Batch {batch_idx} failed: {e}")
+        
+        insertion_time = time.time() - insertion_start
+        total_keys_inserted = keys_processed.get()
+        monitor.log(f"✓ Parallel insertion complete: {total_keys_inserted:,} keys in {insertion_time:.1f}s "
+                    f"({total_keys_inserted/insertion_time:.0f} keys/sec)")
+        
+        # Phase 2: Measure data-only memory
+        data_memory = client.info("memory")
+        data_used = data_memory['used_memory']
+        data_only_kb = (data_used - baseline_used) // 1024
+        monitor.log(f"Data-only memory: {data_only_kb:,} KB")
+        
+        # Phase 3: Create index and monitor indexing progress
+        index_name = "million_key_stress_index"
+        monitor.log(f"Phase 2: Creating search index '{index_name}'")
+        monitor.set_index_name(index_name)
+        
+        # Create index
+        self.create_index_with_minimal_vector(index_name)
+        
+        # Wait for indexing with detailed monitoring
+        self.wait_for_indexing(client, index_name, total_keys, monitor)
+        
+        # Phase 4: Final measurements and analysis
+        final_memory = client.info("memory")
+        final_used = final_memory['used_memory']
+        total_memory_kb = (final_used - baseline_used) // 1024
+        index_overhead_kb = (final_used - data_used) // 1024
+        
+        # Get search-specific memory details
+        try:
+            search_info = client.info("SEARCH")
+            search_memory_kb = search_info.get('search_used_memory_bytes', 0) // 1024
+        except:
+            search_memory_kb = index_overhead_kb
+        
+        # Calculate key metrics
+        overhead_ratio = index_overhead_kb / data_only_kb if data_only_kb > 0 else 0
+        memory_per_key = total_memory_kb / total_keys if total_keys > 0 else 0
+        
+        # Final report
+        total_time = time.time() - insertion_start
+        monitor.log("✓ Million key memory tracking complete!")
+        
+        logging.info("\n" + "="*80)
+        logging.info("MILLION KEY MEMORY TRACKING RESULTS")
+        logging.info("="*80)
+        logging.info(f"Total Keys:           {total_keys:,}")
+        logging.info(f"Unique Tags:          {len(tags_with_freq):,}")
+        logging.info(f"Processing Time:      {total_time:.1f}s")
+        logging.info(f"Insertion Rate:       {total_keys/insertion_time:.0f} keys/sec")
+        logging.info(f"Threads Used:         {num_threads}")
+        logging.info("")
+        logging.info("Memory Usage:")
+        logging.info(f"  Baseline:           {baseline_used//1024:,} KB")
+        logging.info(f"  Data Only:          {data_only_kb:,} KB")
+        logging.info(f"  Search Index:       {index_overhead_kb:,} KB")
+        logging.info(f"  Total:              {total_memory_kb:,} KB")
+        logging.info(f"  Memory per Key:     {memory_per_key:.3f} KB")
+        logging.info(f"  Index Overhead:     {overhead_ratio:.2f}x data size")
+        logging.info("")
+        logging.info("Key Findings:")
+        logging.info(f"- Parallel insertion achieved {total_keys/insertion_time:.0f} keys/sec with {num_threads} threads")
+        logging.info(f"- Search index overhead is {overhead_ratio:.2f}x the raw data size")
+        logging.info(f"- Average memory per key: {memory_per_key:.3f} KB")
+        logging.info(f"- Total memory efficiency: {(total_keys * 100) / total_memory_kb:.0f} keys per MB")
+        
+        # Cleanup
+        try:
+            client.execute_command("FT.DROPINDEX", index_name)
+            monitor.log("Index cleanup complete")
+        except:
+            pass
+        
+        monitor.clear_index_names()
+        monitor.stop()
+
+    def test_old_million_key_memory_tracking(self):
+        """Test memory tracking with 1 million keys using multi-threading and client pool"""
+        logging.info("=== Running Million Key Memory Tracking ===")
+        logging.info("Testing large-scale memory usage patterns with parallel ingestion and monitoring\n")
+        
+        total_keys = 1000000
+        num_threads = min(8, max(4, total_keys // 100000))  # 4-8 threads for 1M keys
+        
         
         # Get main client for setup
         client = self.server.get_new_client()
@@ -903,75 +1140,89 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         monitor.log(f"Using batch size: {batch_size:,} keys per batch")
         
         # Thread-safe progress tracking
-        class ProgressTracker:
-            def __init__(self):
-                self.processed = 0
+        class ThreadSafeCounter:
+            def __init__(self, initial_value=0):
+                self.value = initial_value
                 self.lock = threading.Lock()
             
-            def update(self, count):
+            def increment(self, delta=1):
                 with self.lock:
-                    self.processed += count
-                    return self.processed
+                    self.value += delta
+                    return self.value
             
             def get(self):
                 with self.lock:
-                    return self.processed
+                    return self.value
         
-        progress = ProgressTracker()
-        
-        def insert_batch(batch_client, batch_data, batch_id):
-            """Insert a batch of keys using a pooled client"""               
-            pipe = batch_client.pipeline()
+        keys_processed = ThreadSafeCounter(0)
+        # def insert_batch(batch_data, batch_id):
+        #     """Insert a batch of keys using a pooled client"""
+        #     batch_client = self.server.get_new_client()
+        #     pipe = batch_client.pipeline()
             
-            for key, tag_string in batch_data:
-                pipe.hset(key, mapping={"tags": tag_string, "vector": dummy_vector})
+        #     for key, tag_string in batch_data:
+        #         pipe.hset(key, mapping={"tags": tag_string, "vector": dummy_vector})
             
-            pipe.execute()
+        #     pipe.execute()
             
-            # Update progress
-            processed = progress.update(len(batch_data))
+        #     # Update progress
+        #     processed = progress.update(len(batch_data))
             
-            # Update monitor status occasionally
-            if processed % (batch_size * 10) == 0 or processed >= total_keys:
-                elapsed = time.time() - insertion_start
-                rate = processed / elapsed if elapsed > 0 else 0
-                progress_pct = (processed / total_keys) * 100
+        #     # Update monitor status occasionally
+        #     if processed % (batch_size * 10) == 0 or processed >= total_keys:
+        #         elapsed = time.time() - insertion_start
+        #         rate = processed / elapsed if elapsed > 0 else 0
+        #         progress_pct = (processed / total_keys) * 100
                 
-                monitor.update_status({
-                    "Phase": "Data Insertion",
-                    "Progress": f"{processed:,}/{total_keys:,} ({progress_pct:.1f}%)",
-                    "Rate": f"{rate:.0f} keys/sec",
-                    "Batches": f"{batch_id+1} threads active"
-                })
-            
-            return len(batch_data)
+        #         monitor.update_status({
+        #             "Phase": "Data Insertion",
+        #             "Progress": f"{processed:,}/{total_keys:,} ({progress_pct:.1f}%)",
+        #             "Rate": f"{rate:.0f} keys/sec",
+        #             "Batches": f"{batch_id+1} threads active"
+        #         })
+        #     batch_client.close()
+        #     return len(batch_data)
                 
         
         # Create batches and process in parallel
+        # batches = []
+        # for i in range(0, len(keys_and_data), batch_size):
+        #     batch = keys_and_data[i:i+batch_size]
+        #     batches.append(batch)
+         # Split keys_and_tags into batches for threading
         batches = []
-        for i in range(0, len(keys_and_data), batch_size):
-            batch = keys_and_data[i:i+batch_size]
+        for i in range(0, len(keys_and_tags), batch_size):
+            batch = keys_and_tags[i:i+batch_size]
             batches.append(batch)
         
+        # Process batches using ThreadPoolExecutor
+        completed_batches = 0
+        total_batches = len(batches)
         # Execute all batches in parallel
         with ThreadPoolExecutor(max_workers=num_threads, thread_name_prefix="MillionKeyInsert") as executor:
-            futures = []
-            for batch_id, batch in enumerate(batches):
-                batch_client = self.server.get_new_client()
-                future = executor.submit(insert_batch, batch_client, batch, batch_id)
-                futures.append(future)
+            future_to_batch = {}
+            for batch_idx, batch in enumerate(batches):
+                future = executor.submit(process_batch, batch, batch_idx)
+                future_to_batch[future] = batch_idx
             
-            # Wait for all batches to complete
-            total_inserted = 0
-            for future in as_completed(futures):
+            # Process completed batches
+            for future in as_completed(future_to_batch):
+                batch_idx = future_to_batch[future]
                 try:
-                    inserted = future.result()
-                    total_inserted += inserted
+                    batch_keys_processed, batch_time = future.result()
+                    completed_batches += 1
+                    
+                    # Periodic progress logging
+                    if completed_batches % max(1, total_batches // 10) == 0 or completed_batches % 50 == 0:
+                        batch_progress_pct = (completed_batches / total_batches) * 100
+                        current_keys = keys_processed.get()
+                        monitor.log(f"    Batch progress: {completed_batches}/{total_batches} ({batch_progress_pct:.1f}%) | Keys: {current_keys:,}")
+                        
                 except Exception as e:
-                    monitor.log(f"Batch execution error: {e}")
+                    monitor.log(f"  ❌ Batch {batch_idx} failed: {e}")
         
         insertion_time = time.time() - insertion_start
-        final_processed = progress.get()
+        final_processed = keys_processed.get()
         monitor.log(f"✓ Parallel insertion complete: {final_processed:,} keys in {insertion_time:.1f}s "
                     f"({final_processed/insertion_time:.0f} keys/sec)")
         
