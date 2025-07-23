@@ -338,7 +338,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             return False
     
     def wait_for_indexing(self, client: Valkey, index_name: str, expected_docs: int, 
-                         monitor: ProgressMonitor, timeout: int = 300):
+                         monitor: ProgressMonitor, timeout: int = 300000):
         """Wait for indexing to complete with detailed progress monitoring"""
         start_time = time.time()
         last_report_time = start_time
@@ -459,7 +459,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log(f"  Generating {scenario.total_keys:,} keys with {scenario.description}")
             
             # Create client pool for parallel insertion
-            num_threads = min(8, max(2, scenario.total_keys // 50000))
+            num_threads = min(64, max(2, scenario.total_keys // 50000))
             client_pool = ClientPool(self.server, num_threads)
             
             # Insert data using generator with parallel processing
