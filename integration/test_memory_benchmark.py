@@ -29,7 +29,7 @@ except ImportError:
 from valkey import ResponseError
 from valkey.client import Valkey
 from valkey.asyncio import Valkey as AsyncValkey
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import ValkeySearchTestCaseBase, ValkeySearchClusterTestCase
 
 # Suppress client logging
 import contextlib
@@ -1726,7 +1726,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             ))
         
         # 6. Tag count variations
-        for avg_tags in [10, 1000]:
+        for avg_tags in [10, 50]:
             scenarios.append(BenchmarkScenario(
                 name=f"TagCount_{avg_tags}",
                 total_keys=base_keys,
@@ -1740,7 +1740,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             ))
         
         # 7. Tag length variations
-        for tag_len in [64, 1200]:
+        for tag_len in [64, 200]:
             scenarios.append(BenchmarkScenario(
                 name=f"TagLength_{tag_len}",
                 total_keys=base_keys,
@@ -1760,7 +1760,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 total_keys=base_keys,
                 tags_config=TagsConfig(
                     num_keys=base_keys,
-                    tags_per_key=TagDistribution(avg=50, min=1, max=1000, distribution=dist),
+                    tags_per_key=TagDistribution(avg=25, min=1, max=100, distribution=dist),
                     tag_length=LengthConfig(avg=40, min=10, max=300),
                     sharing=TagSharingConfig(mode=TagSharingMode.SHARED_POOL, pool_size=5000)
                 ),
@@ -1793,7 +1793,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log(f"  - Memory limit for tests: {available_bytes * 0.5 / (1024**3):.1f} GB (50% of available)\n")
         
         # Create scenarios
-        scenarios = self.create_comprehensive_scenarios(base_keys=1000000)
+        scenarios = self.create_comprehensive_scenarios(base_keys=100000)
         results = []
         
         # CSV filename with timestamp
