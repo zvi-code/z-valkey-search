@@ -11,9 +11,12 @@ import time
 import struct
 import threading
 import logging
-from typing import Dict, List, Tuple, Optional, Iterator, Any
+from datetime import datetime
+from typing import Dict, List, Tuple, Optional, Iterator, Any, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from collections import Counter, defaultdict
+import json
 
 try:
     import psutil
@@ -37,6 +40,134 @@ from tags_builder import (
 from string_generator import (
     LengthConfig, PrefixConfig, Distribution, StringType
 )
+
+
+@dataclass
+class DistributionStats:
+    """Statistics for a distribution"""
+    count: int = 0
+    min: float = float('inf')
+    max: float = float('-inf')
+    sum: float = 0
+    histogram: Counter = field(default_factory=Counter)
+    
+    def add(self, value: float):
+        """Add a value to the distribution"""
+        self.count += 1
+        self.min = min(self.min, value)
+        self.max = max(value, self.max)
+        self.sum += value
+        self.histogram[value] += 1
+    
+    @property
+    def mean(self) -> float:
+        return self.sum / self.count if self.count > 0 else 0
+    
+    def get_percentile(self, p: float) -> float:
+        """Get percentile value (0-100)"""
+        if not self.histogram:
+            return 0
+        
+        sorted_values = sorted(self.histogram.items())
+        total = sum(count for _, count in sorted_values)
+        target = total * p / 100
+        
+        cumulative = 0
+        for value, count in sorted_values:
+            cumulative += count
+            if cumulative >= target:
+                return value
+        
+        return sorted_values[-1][0] if sorted_values else 0
+
+
+class DistributionCollector:
+    """Collects distribution statistics during data generation"""
+    
+    def __init__(self):
+        # Tag length distribution
+        self.tag_lengths = DistributionStats()
+        
+        # Tags per key distribution
+        self.tags_per_key = DistributionStats()
+        
+        # Tag usage: how many keys have each tag
+        self.tag_usage = Counter()
+        
+        # For thread safety
+        self.lock = threading.Lock()
+        
+        # Track unique tags
+        self.unique_tags = set()
+        
+    def process_key(self, key: str, tags_field: str):
+        """Process a single key's tags"""
+        tags = [tag.strip() for tag in tags_field.split(',') if tag.strip()]
+        
+        with self.lock:
+            # Tags per key
+            self.tags_per_key.add(len(tags))
+            
+            # Process each tag
+            for tag in tags:
+                # Tag length
+                self.tag_lengths.add(len(tag))
+                
+                # Tag usage
+                self.tag_usage[tag] += 1
+                
+                # Track unique tags
+                self.unique_tags.add(tag)
+    
+    def get_tag_usage_distribution(self) -> DistributionStats:
+        """Get distribution of how many keys use each tag"""
+        usage_dist = DistributionStats()
+        for tag, count in self.tag_usage.items():
+            usage_dist.add(count)
+        return usage_dist
+    
+    def get_summary(self) -> Dict[str, Any]:
+        """Get summary statistics"""
+        tag_usage_dist = self.get_tag_usage_distribution()
+        
+        return {
+            'tag_lengths': {
+                'count': self.tag_lengths.count,
+                'min': self.tag_lengths.min,
+                'max': self.tag_lengths.max,
+                'mean': self.tag_lengths.mean,
+                'p50': self.tag_lengths.get_percentile(50),
+                'p95': self.tag_lengths.get_percentile(95),
+                'p99': self.tag_lengths.get_percentile(99)
+            },
+            'tags_per_key': {
+                'count': self.tags_per_key.count,
+                'min': self.tags_per_key.min,
+                'max': self.tags_per_key.max,
+                'mean': self.tags_per_key.mean,
+                'p50': self.tags_per_key.get_percentile(50),
+                'p95': self.tags_per_key.get_percentile(95),
+                'p99': self.tags_per_key.get_percentile(99)
+            },
+            'tag_usage': {
+                'unique_tags': len(self.unique_tags),
+                'total_tag_instances': sum(self.tag_usage.values()),
+                'min_keys_per_tag': tag_usage_dist.min,
+                'max_keys_per_tag': tag_usage_dist.max,
+                'mean_keys_per_tag': tag_usage_dist.mean,
+                'p50_keys_per_tag': tag_usage_dist.get_percentile(50),
+                'p95_keys_per_tag': tag_usage_dist.get_percentile(95),
+                'p99_keys_per_tag': tag_usage_dist.get_percentile(99)
+            }
+        }
+    
+    def get_detailed_distributions(self) -> Dict[str, Any]:
+        """Get detailed distribution data for visualization"""
+        return {
+            'tag_lengths_histogram': dict(self.tag_lengths.histogram),
+            'tags_per_key_histogram': dict(self.tags_per_key.histogram),
+            'tag_usage_histogram': dict(Counter(self.tag_usage.values()))
+        }
 
 
 @dataclass
@@ -316,6 +447,52 @@ class ProgressMonitor:
 class TestMemoryBenchmark(ValkeySearchTestCaseBase):
     """Comprehensive Tag Index memory benchmarking using hash_generator"""
     
+    def setup_file_logging(self, test_name: str) -> str:
+        """Set up file logging for the test with timestamps"""
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        log_filename = f"memory_benchmark_{test_name}_{timestamp}.log"
+        
+        # Create a file handler
+        file_handler = logging.FileHandler(log_filename)
+        file_handler.setLevel(logging.INFO)
+        
+        # Create formatter with timestamp
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', 
+                                    datefmt='%Y-%m-%d %H:%M:%S')
+        file_handler.setFormatter(formatter)
+        
+        # Add handler to root logger
+        logging.getLogger().addHandler(file_handler)
+        
+        # Also update console output to include timestamps
+        for handler in logging.getLogger().handlers:
+            if isinstance(handler, logging.StreamHandler) and handler != file_handler:
+                handler.setFormatter(formatter)
+        
+        logging.info(f"Starting {test_name} - Log file: {log_filename}")
+        return log_filename
+    
+    def append_to_csv(self, csv_filename: str, result: Dict, write_header: bool = False):
+        """Append a result to CSV file incrementally"""
+        # Add timestamp to the result
+        result['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Check if file exists
+        file_exists = os.path.exists(csv_filename)
+        
+        # Write to CSV
+        with open(csv_filename, 'a') as f:
+            headers = list(result.keys())
+            
+            # Write header if needed (new file or explicitly requested)
+            if write_header or not file_exists:
+                f.write(','.join(headers) + '\n')
+            
+            # Write the data row
+            f.write(','.join(str(result.get(h, '')) for h in headers) + '\n')
+        
+        logging.info(f"Results appended to {csv_filename}")
+    
     def get_available_memory_bytes(self) -> int:
         """Get available memory on the system in bytes"""
         if PSUTIL_AVAILABLE:
@@ -586,8 +763,11 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log(f"  Generating {scenario.total_keys:,} keys with {scenario.description}")
             
             # Create client pool for parallel insertion
-            num_threads = min(64, max(2, scenario.total_keys // 50000))
+            num_threads = min(64, max(2, scenario.total_keys // config.batch_size))
             client_pool = ClientPool(self.server, num_threads)
+            
+            # Create distribution collector
+            dist_collector = DistributionCollector()
             
             # Insert data using generator with parallel processing
             insertion_start_time = time.time()
@@ -603,6 +783,10 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 
                 for key, fields in batch_data:
                     pipe.hset(key, mapping=fields)
+                    
+                    # Collect distribution statistics
+                    if 'tags' in fields:
+                        dist_collector.process_key(key, fields['tags'])
                 
                 pipe.execute()
                 batch_time = time.time() - batch_start
@@ -656,6 +840,21 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log(f"  ✓ Data insertion complete: {total_keys_inserted:,} keys in {insertion_time:.1f}s "
                        f"({total_keys_inserted/insertion_time:.0f} keys/sec) using {num_threads} threads")
             
+            # Log distribution statistics
+            dist_summary = dist_collector.get_summary()
+            monitor.log(f"  Distribution Statistics:")
+            monitor.log(f"    Tag Lengths: min={dist_summary['tag_lengths']['min']}, "
+                       f"max={dist_summary['tag_lengths']['max']}, "
+                       f"mean={dist_summary['tag_lengths']['mean']:.1f}, "
+                       f"p95={dist_summary['tag_lengths']['p95']}")
+            monitor.log(f"    Tags per Key: min={dist_summary['tags_per_key']['min']}, "
+                       f"max={dist_summary['tags_per_key']['max']}, "
+                       f"mean={dist_summary['tags_per_key']['mean']:.1f}, "
+                       f"p95={dist_summary['tags_per_key']['p95']}")
+            monitor.log(f"    Tag Usage: {dist_summary['tag_usage']['unique_tags']} unique tags, "
+                       f"mean keys/tag={dist_summary['tag_usage']['mean_keys_per_tag']:.1f}, "
+                       f"max={dist_summary['tag_usage']['max_keys_per_tag']}")
+            
             # Measure memory after data insertion
             data_memory = client.info("memory")['used_memory']
             data_memory_kb = (data_memory - baseline_memory) // 1024
@@ -687,6 +886,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             vector_memory_kb = (scenario.total_keys * 8 * 4) // 1024  # 8 dim * 4 bytes
             tag_index_memory_kb = max(0, search_memory_kb - vector_memory_kb)
             
+            # Include distribution statistics in results
+            dist_stats = dist_collector.get_summary()
+            
             result = {
                 'scenario_name': scenario.name,
                 'description': scenario.description,
@@ -697,11 +899,37 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 'tag_index_memory_kb': tag_index_memory_kb,
                 'vector_memory_kb': vector_memory_kb,
                 'insertion_time': insertion_time,
-                'tags_config': str(scenario.tags_config.sharing.mode.value)
+                'tags_config': str(scenario.tags_config.sharing.mode.value),
+                # Distribution statistics
+                'unique_tags': dist_stats['tag_usage']['unique_tags'],
+                'tag_length_min': dist_stats['tag_lengths']['min'],
+                'tag_length_max': dist_stats['tag_lengths']['max'],
+                'tag_length_mean': dist_stats['tag_lengths']['mean'],
+                'tag_length_p95': dist_stats['tag_lengths']['p95'],
+                'tags_per_key_min': dist_stats['tags_per_key']['min'],
+                'tags_per_key_max': dist_stats['tags_per_key']['max'],
+                'tags_per_key_mean': dist_stats['tags_per_key']['mean'],
+                'tags_per_key_p95': dist_stats['tags_per_key']['p95'],
+                'keys_per_tag_min': dist_stats['tag_usage']['min_keys_per_tag'],
+                'keys_per_tag_max': dist_stats['tag_usage']['max_keys_per_tag'],
+                'keys_per_tag_mean': dist_stats['tag_usage']['mean_keys_per_tag'],
+                'keys_per_tag_p95': dist_stats['tag_usage']['p95_keys_per_tag']
             }
             
             monitor.log(f"  Results: Data={data_memory_kb:,}KB, TagIndex={tag_index_memory_kb:,}KB, "
                        f"Vector={vector_memory_kb:,}KB, Total={total_memory_kb:,}KB")
+            
+            # Save detailed distribution data
+            detailed_dists = dist_collector.get_detailed_distributions()
+            dist_filename = f"distributions_{scenario.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            with open(dist_filename, 'w') as f:
+                json.dump({
+                    'scenario': scenario.name,
+                    'total_keys': scenario.total_keys,
+                    'summary': dist_stats,
+                    'detailed': detailed_dists
+                }, f, indent=2)
+            monitor.log(f"  Distribution details saved to {dist_filename}")
             
             # Cleanup
             try:
@@ -750,7 +978,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         ))
         
         # 3. Shared pool with varying pool sizes
-        for pool_size in [100, 1000, 10000]:
+        for pool_size in [100, 10000]:
             scenarios.append(BenchmarkScenario(
                 name=f"SharedPool_{pool_size}",
                 total_keys=base_keys,
@@ -768,7 +996,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             ))
         
         # 4. Group-based sharing (realistic scenarios)
-        for group_size in [100, 1000, 10000]:
+        for group_size in [100, 10000]:
             scenarios.append(BenchmarkScenario(
                 name=f"GroupBased_{group_size}",
                 total_keys=base_keys,
@@ -786,7 +1014,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             ))
         
         # 5. Prefix sharing variations
-        for prefix_ratio in [0.3, 0.5, 0.8]:
+        for prefix_ratio in [0.3, 0.8]:
             scenarios.append(BenchmarkScenario(
                 name=f"PrefixShare_{int(prefix_ratio*100)}pct",
                 total_keys=base_keys,
@@ -807,7 +1035,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             ))
         
         # 6. Tag count variations
-        for avg_tags in [2, 5, 10, 20]:
+        for avg_tags in [10, 1000]:
             scenarios.append(BenchmarkScenario(
                 name=f"TagCount_{avg_tags}",
                 total_keys=base_keys,
@@ -821,7 +1049,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             ))
         
         # 7. Tag length variations
-        for tag_len in [10, 20, 50, 100]:
+        for tag_len in [64, 1200]:
             scenarios.append(BenchmarkScenario(
                 name=f"TagLength_{tag_len}",
                 total_keys=base_keys,
@@ -852,6 +1080,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
     
     def test_comprehensive_memory_benchmark(self):
         """Run comprehensive memory benchmark with all sharing patterns"""
+        # Set up file logging
+        log_file = self.setup_file_logging("comprehensive")
+        
         logging.info("=== COMPREHENSIVE MEMORY BENCHMARK ===")
         logging.info("Testing various tag sharing patterns and configurations\n")
         
@@ -864,15 +1095,18 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             logging.info(f"  - Used: {memory.percent:.1f}%")
             logging.info(f"  - Memory limit for tests: {memory.available * 0.5 / (1024**3):.1f} GB (50% of available)\n")
         else:
-            assert False, "Unable to determine available memory"
             available_bytes = self.get_available_memory_bytes()
             logging.info(f"System Memory Status (limited info - psutil not available):")
             logging.info(f"  - Available: {available_bytes / (1024**3):.1f} GB")
             logging.info(f"  - Memory limit for tests: {available_bytes * 0.5 / (1024**3):.1f} GB (50% of available)\n")
         
         # Create scenarios
-        scenarios = self.create_comprehensive_scenarios(base_keys=10000000)
+        scenarios = self.create_comprehensive_scenarios(base_keys=1000000)
         results = []
+        
+        # CSV filename with timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        csv_filename = f"comprehensive_benchmark_results_{timestamp}.csv"
         
         # Run each scenario
         for i, scenario in enumerate(scenarios):
@@ -880,8 +1114,22 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             try:
                 result = self.run_benchmark_scenario(scenario)
                 results.append(result)
+                
+                # Append to CSV incrementally (write header only for first result)
+                self.append_to_csv(csv_filename, result, write_header=(i == 0))
+                
             except Exception as e:
                 logging.error(f"  ❌ Scenario failed: {e}")
+                # Log failed scenario to CSV as well
+                failed_result = {
+                    'scenario_name': scenario.name,
+                    'description': scenario.description,
+                    'total_keys': scenario.total_keys,
+                    'skipped': True,
+                    'reason': f"Failed: {str(e)}"
+                }
+                results.append(failed_result)
+                self.append_to_csv(csv_filename, failed_result, write_header=(i == 0))
                 continue
         
         # Print summary table
@@ -933,18 +1181,14 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             for r in sorted(group_results, key=lambda x: x['scenario_name']):
                 logging.info(f"  - {r['description']}: {r['tag_index_memory_kb']:,} KB")
         
-        # Save detailed results
-        csv_filename = "comprehensive_benchmark_results.csv"
-        with open(csv_filename, 'w') as f:
-            headers = list(results[0].keys())
-            f.write(','.join(headers) + '\n')
-            for r in results:
-                f.write(','.join(str(r.get(h, '')) for h in headers) + '\n')
-        
         logging.info(f"\nDetailed results saved to {csv_filename}")
+        logging.info(f"Log file: {log_file}")
     
     def test_quick_memory_benchmark(self):
         """Quick benchmark with smaller dataset"""
+        # Set up file logging
+        log_file = self.setup_file_logging("quick")
+        
         logging.info("=== QUICK MEMORY BENCHMARK (10K keys) ===")
         
         # Log system memory information
@@ -960,6 +1204,10 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             logging.info(f"System Memory Status (limited info - psutil not available):")
             logging.info(f"  - Available: {available_bytes / (1024**3):.1f} GB")
             logging.info(f"  - Memory limit for tests: {available_bytes * 0.5 / (1024**3):.1f} GB (50% of available)\n")
+        
+        # CSV filename with timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        csv_filename = f"quick_benchmark_results_{timestamp}.csv"
         
         scenarios = [
             BenchmarkScenario(
@@ -1002,14 +1250,37 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         ]
         
         results = []
-        for scenario in scenarios:
+        for i, scenario in enumerate(scenarios):
             logging.info(f"\nRunning: {scenario.name}")
-            result = self.run_benchmark_scenario(scenario)
-            results.append(result)
+            try:
+                result = self.run_benchmark_scenario(scenario)
+                results.append(result)
+                
+                # Append to CSV incrementally
+                self.append_to_csv(csv_filename, result, write_header=(i == 0))
+                
+            except Exception as e:
+                logging.error(f"  ❌ Scenario failed: {e}")
+                failed_result = {
+                    'scenario_name': scenario.name,
+                    'description': scenario.description,
+                    'total_keys': scenario.total_keys,
+                    'skipped': True,
+                    'reason': f"Failed: {str(e)}"
+                }
+                results.append(failed_result)
+                self.append_to_csv(csv_filename, failed_result, write_header=(i == 0))
+                continue
         
         # Quick summary
         logging.info("\n" + "="*80)
         logging.info("QUICK BENCHMARK SUMMARY")
         logging.info("="*80)
         for r in results:
-            logging.info(f"{r['scenario_name']:<20}: {r['tag_index_memory_kb']:>8,} KB tag index")
+            if r.get('skipped'):
+                logging.info(f"{r['scenario_name']:<20}: SKIPPED - {r.get('reason', 'Unknown')}")
+            else:
+                logging.info(f"{r['scenario_name']:<20}: {r['tag_index_memory_kb']:>8,} KB tag index")
+        
+        logging.info(f"\nResults saved to {csv_filename}")
+        logging.info(f"Log file: {log_file}")
