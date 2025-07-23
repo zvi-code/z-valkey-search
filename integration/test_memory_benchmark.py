@@ -15,6 +15,13 @@ from typing import Dict, List, Tuple, Optional, Iterator, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    logging.warning("psutil not available - memory validation will use fallback method")
+
 from valkey import ResponseError
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
@@ -309,6 +316,104 @@ class ProgressMonitor:
 class TestMemoryBenchmark(ValkeySearchTestCaseBase):
     """Comprehensive Tag Index memory benchmarking using hash_generator"""
     
+    def get_available_memory_bytes(self) -> int:
+        """Get available memory on the system in bytes"""
+        if PSUTIL_AVAILABLE:
+            memory = psutil.virtual_memory()
+            return memory.available
+        else:
+            # Fallback: parse /proc/meminfo on Linux
+            try:
+                with open('/proc/meminfo', 'r') as f:
+                    for line in f:
+                        if line.startswith('MemAvailable:'):
+                            # MemAvailable is in kB
+                            return int(line.split()[1]) * 1024
+            except:
+                # Conservative fallback: assume 2GB available
+                logging.warning("Could not determine available memory, using conservative 2GB estimate")
+                return 2 * 1024 * 1024 * 1024
+    
+    def estimate_memory_usage(self, scenario: BenchmarkScenario) -> Dict[str, int]:
+        """Estimate memory usage for a scenario in bytes"""
+        # Base estimates
+        key_overhead = 64  # Redis key overhead
+        hash_overhead = 64  # Hash structure overhead
+        field_overhead = 24  # Per field overhead
+        
+        # Tag field estimate
+        avg_tags_per_key = scenario.tags_config.tags_per_key.avg
+        avg_tag_length = scenario.tags_config.tag_length.avg
+        tag_field_size = avg_tags_per_key * (avg_tag_length + 10)  # +10 for separators/overhead
+        
+        # Vector field estimate (8 dimensions * 4 bytes per float)
+        vector_field_size = 8 * 4
+        
+        # Per-key memory estimate
+        per_key_memory = (
+            key_overhead + 
+            hash_overhead + 
+            2 * field_overhead +  # tags and vector fields
+            tag_field_size + 
+            vector_field_size
+        )
+        
+        # Total data memory
+        data_memory = scenario.total_keys * per_key_memory
+        
+        # Index memory estimate (conservative)
+        # Tag index overhead depends on sharing pattern
+        if scenario.tags_config.sharing.mode == TagSharingMode.UNIQUE:
+            # Worst case: each tag is unique
+            unique_tags = scenario.total_keys * avg_tags_per_key
+            tag_index_memory = unique_tags * 100  # ~100 bytes per unique tag entry
+        elif scenario.tags_config.sharing.mode == TagSharingMode.PERFECT_OVERLAP:
+            # Best case: all keys share same tags
+            unique_tags = avg_tags_per_key
+            tag_index_memory = unique_tags * 100 + scenario.total_keys * 20
+        else:
+            # Estimate based on pool size or group configuration
+            if scenario.tags_config.sharing.pool_size:
+                unique_tags = scenario.tags_config.sharing.pool_size
+            else:
+                # Group-based or other patterns
+                unique_tags = scenario.total_keys * avg_tags_per_key * 0.3  # 30% unique tags estimate
+            tag_index_memory = unique_tags * 100 + scenario.total_keys * 20
+        
+        # Vector index memory (FLAT algorithm)
+        vector_index_memory = scenario.total_keys * 8 * 4  # dimensions * bytes per float
+        
+        # Total index memory
+        index_memory = tag_index_memory + vector_index_memory
+        
+        # Add 30% overhead for Redis internals, fragmentation, etc.
+        total_memory = int((data_memory + index_memory) * 1.3)
+        
+        return {
+            'data_memory': data_memory,
+            'tag_index_memory': tag_index_memory,
+            'vector_index_memory': vector_index_memory,
+            'index_memory': index_memory,
+            'total_memory': total_memory
+        }
+    
+    def validate_memory_requirements(self, scenario: BenchmarkScenario) -> Tuple[bool, str]:
+        """Validate if scenario can run without using swap"""
+        available_memory = self.get_available_memory_bytes()
+        estimates = self.estimate_memory_usage(scenario)
+        
+        # Ensure we use less than 50% of available memory to avoid swap
+        memory_limit = available_memory * 0.5
+        
+        if estimates['total_memory'] > memory_limit:
+            return False, (
+                f"Scenario '{scenario.name}' requires ~{estimates['total_memory'] / (1024**3):.1f}GB "
+                f"but only {memory_limit / (1024**3):.1f}GB is safely available "
+                f"(50% of {available_memory / (1024**3):.1f}GB free memory)"
+            )
+        
+        return True, f"Memory check passed: ~{estimates['total_memory'] / (1024**3):.1f}GB required, {available_memory / (1024**3):.1f}GB available"
+    
     def create_schema(self, index_name: str, vector_dim: int = 8) -> IndexSchema:
         """Create a minimal schema with tags and small vector"""
         return IndexSchema(
@@ -420,6 +525,20 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
     
     def run_benchmark_scenario(self, scenario: BenchmarkScenario) -> Dict:
         """Run a single benchmark scenario with full monitoring"""
+        # Validate memory requirements before starting
+        can_run, message = self.validate_memory_requirements(scenario)
+        logging.info(f"Memory validation: {message}")
+        
+        if not can_run:
+            logging.error(f"❌ Skipping scenario due to memory constraints")
+            return {
+                'scenario_name': scenario.name,
+                'description': scenario.description,
+                'total_keys': scenario.total_keys,
+                'skipped': True,
+                'reason': message
+            }
+        
         monitor = ProgressMonitor(self.server, scenario.name)
         monitor.start()
         
@@ -439,6 +558,14 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             # Measure baseline
             baseline_memory = client.info("memory")['used_memory']
             monitor.log(f"  Baseline memory: {baseline_memory // 1024:,} KB")
+            
+            # Log memory estimates
+            estimates = self.estimate_memory_usage(scenario)
+            monitor.log(f"  Estimated memory usage:")
+            monitor.log(f"    - Data: {estimates['data_memory'] // (1024**2):,} MB")
+            monitor.log(f"    - Tag index: {estimates['tag_index_memory'] // (1024**2):,} MB")
+            monitor.log(f"    - Vector index: {estimates['vector_index_memory'] // (1024**2):,} MB")
+            monitor.log(f"    - Total (with overhead): {estimates['total_memory'] // (1024**2):,} MB")
             
             # Create schema and generator
             index_name = f"idx_{scenario.name.lower().replace(' ', '_')}"
@@ -728,6 +855,21 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         logging.info("=== COMPREHENSIVE MEMORY BENCHMARK ===")
         logging.info("Testing various tag sharing patterns and configurations\n")
         
+        # Log system memory information
+        if PSUTIL_AVAILABLE:
+            memory = psutil.virtual_memory()
+            logging.info(f"System Memory Status:")
+            logging.info(f"  - Total: {memory.total / (1024**3):.1f} GB")
+            logging.info(f"  - Available: {memory.available / (1024**3):.1f} GB")
+            logging.info(f"  - Used: {memory.percent:.1f}%")
+            logging.info(f"  - Memory limit for tests: {memory.available * 0.5 / (1024**3):.1f} GB (50% of available)\n")
+        else:
+            assert False, "Unable to determine available memory"
+            available_bytes = self.get_available_memory_bytes()
+            logging.info(f"System Memory Status (limited info - psutil not available):")
+            logging.info(f"  - Available: {available_bytes / (1024**3):.1f} GB")
+            logging.info(f"  - Memory limit for tests: {available_bytes * 0.5 / (1024**3):.1f} GB (50% of available)\n")
+        
         # Create scenarios
         scenarios = self.create_comprehensive_scenarios(base_keys=10000000)
         results = []
@@ -751,22 +893,31 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         logging.info("-" * 120)
         
         for r in results:
-            logging.info(f"{r['scenario_name']:<30} "
-                        f"{r['total_keys']:>8,} "
-                        f"{r['data_memory_kb']:>10,} "
-                        f"{r['tag_index_memory_kb']:>10,} "
-                        f"{r['total_memory_kb']:>10,} "
-                        f"{r['insertion_time']:>8.1f} "
-                        f"{r['tags_config']:<15}")
+            if r.get('skipped'):
+                logging.info(f"{r['scenario_name']:<30} "
+                            f"{r['total_keys']:>8,} "
+                            f"{'SKIPPED':>10} "
+                            f"{'':>10} "
+                            f"{'':>10} "
+                            f"{'':>8} "
+                            f"Memory limit exceeded")
+            else:
+                logging.info(f"{r['scenario_name']:<30} "
+                            f"{r['total_keys']:>8,} "
+                            f"{r['data_memory_kb']:>10,} "
+                            f"{r['tag_index_memory_kb']:>10,} "
+                            f"{r['total_memory_kb']:>10,} "
+                            f"{r['insertion_time']:>8.1f} "
+                            f"{r['tags_config']:<15}")
         
         # Analyze results by category
         logging.info("\n" + "="*80)
         logging.info("KEY FINDINGS")
         logging.info("="*80)
         
-        # Find extremes
-        baseline = next((r for r in results if 'Baseline' in r['scenario_name']), None)
-        perfect = next((r for r in results if 'Perfect' in r['scenario_name']), None)
+        # Find extremes (excluding skipped scenarios)
+        baseline = next((r for r in results if 'Baseline' in r['scenario_name'] and not r.get('skipped')), None)
+        perfect = next((r for r in results if 'Perfect' in r['scenario_name'] and not r.get('skipped')), None)
         
         if baseline and perfect:
             savings = (baseline['tag_index_memory_kb'] - perfect['tag_index_memory_kb']) / baseline['tag_index_memory_kb'] * 100
@@ -776,7 +927,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             logging.info(f"  - Memory savings: {savings:.1f}%")
         
         # Group-based analysis
-        group_results = [r for r in results if 'GroupBased' in r['scenario_name']]
+        group_results = [r for r in results if 'GroupBased' in r['scenario_name'] and not r.get('skipped')]
         if group_results:
             logging.info(f"\nGroup-based Sharing:")
             for r in sorted(group_results, key=lambda x: x['scenario_name']):
@@ -795,6 +946,20 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
     def test_quick_memory_benchmark(self):
         """Quick benchmark with smaller dataset"""
         logging.info("=== QUICK MEMORY BENCHMARK (10K keys) ===")
+        
+        # Log system memory information
+        if PSUTIL_AVAILABLE:
+            memory = psutil.virtual_memory()
+            logging.info(f"System Memory Status:")
+            logging.info(f"  - Total: {memory.total / (1024**3):.1f} GB")
+            logging.info(f"  - Available: {memory.available / (1024**3):.1f} GB")
+            logging.info(f"  - Used: {memory.percent:.1f}%")
+            logging.info(f"  - Memory limit for tests: {memory.available * 0.5 / (1024**3):.1f} GB (50% of available)\n")
+        else:
+            available_bytes = self.get_available_memory_bytes()
+            logging.info(f"System Memory Status (limited info - psutil not available):")
+            logging.info(f"  - Available: {available_bytes / (1024**3):.1f} GB")
+            logging.info(f"  - Memory limit for tests: {available_bytes * 0.5 / (1024**3):.1f} GB (50% of available)\n")
         
         scenarios = [
             BenchmarkScenario(
