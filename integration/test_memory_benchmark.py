@@ -2068,3 +2068,341 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         monitor.log(f"\nLog file: {log_file}")
         monitor.stop()
+    
+    def test_fuzzy_memory_estimation(self, use_async: bool = True):
+        """Comprehensive fuzzy testing of memory estimation with 1-10M keys"""
+        import random
+        import statistics
+        from enum import Enum
+        
+        # Set up file logging
+        log_file = self.setup_file_logging("fuzzy_estimation")
+        monitor = ProgressMonitor(self.server, "fuzzy_estimation")
+        monitor.start()
+        
+        monitor.log("🎲 FUZZY MEMORY ESTIMATION TESTING")
+        monitor.log("=" * 80)
+        monitor.log("Testing memory estimation accuracy with realistic large datasets")
+        monitor.log("Comparing actual memory usage vs our estimation functions")
+        monitor.log("")
+        
+        # CSV setup
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        csv_filename = f"fuzzy_estimation_results_{timestamp}.csv"
+        
+        # Define fuzzy test patterns with more reasonable sizes
+        # Start smaller and scale up based on what works
+        fuzzy_patterns = [
+            {
+                'name': 'Medium_NoSharing_500K',
+                'total_keys': 500000,
+                'tags_config': TagsConfig(
+                    num_keys=500000,
+                    tags_per_key=TagDistribution(avg=3, min=2, max=4),
+                    tag_length=LengthConfig(avg=25, min=20, max=30),
+                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+                ),
+                'description': '500K keys, unique tags (no sharing), 3 tags/key'
+            },
+            {
+                'name': 'Large_SharedPool_1M',
+                'total_keys': 1000000,
+                'tags_config': TagsConfig(
+                    num_keys=1000000,
+                    tags_per_key=TagDistribution(avg=5, min=3, max=7),
+                    tag_length=LengthConfig(avg=30, min=25, max=35),
+                    sharing=TagSharingConfig(
+                        mode=TagSharingMode.SHARED_POOL,
+                        pool_size=10000,
+                        reuse_probability=0.7
+                    )
+                ),
+                'description': '1M keys, shared pool (10K unique tags), 5 tags/key'
+            },
+            {
+                'name': 'XLarge_GroupBased_2M',
+                'total_keys': 2000000,
+                'tags_config': TagsConfig(
+                    num_keys=2000000,
+                    tags_per_key=TagDistribution(avg=4, min=2, max=6),
+                    tag_length=LengthConfig(avg=35, min=30, max=40),
+                    sharing=TagSharingConfig(
+                        mode=TagSharingMode.GROUP_BASED,
+                        keys_per_group=50000,
+                        tags_per_group=25
+                    )
+                ),
+                'description': '2M keys, group-based sharing (50K keys/group), 4 tags/key'
+            },
+            {
+                'name': 'HighSharing_1M',
+                'total_keys': 1000000,
+                'tags_config': TagsConfig(
+                    num_keys=1000000,
+                    tags_per_key=TagDistribution(avg=6, min=4, max=8),
+                    tag_length=LengthConfig(avg=20, min=15, max=25),
+                    sharing=TagSharingConfig(
+                        mode=TagSharingMode.SHARED_POOL,
+                        pool_size=1000,
+                        reuse_probability=0.9
+                    )
+                ),
+                'description': '1M keys, high sharing (1K unique tags), 6 tags/key'
+            },
+            {
+                'name': 'Zipf_Distribution_1M',
+                'total_keys': 1000000,
+                'tags_config': TagsConfig(
+                    num_keys=1000000,
+                    tags_per_key=TagDistribution(avg=5, min=1, max=20, distribution=Distribution.ZIPF),
+                    tag_length=LengthConfig(avg=40, min=20, max=80),
+                    sharing=TagSharingConfig(
+                        mode=TagSharingMode.SHARED_POOL,
+                        pool_size=5000,
+                        reuse_probability=0.8
+                    )
+                ),
+                'description': '1M keys, zipf distribution, variable tags (1-20), mixed lengths'
+            }
+        ]
+        
+        fuzzy_results = []
+        
+        for i, pattern in enumerate(fuzzy_patterns):
+            monitor.log(f"--- Fuzzy Pattern {i+1}/{len(fuzzy_patterns)}: {pattern['name']} ---")
+            monitor.log(f"  📝 {pattern['description']}")
+            
+            # Create benchmark scenario
+            scenario = BenchmarkScenario(
+                name=pattern['name'],
+                total_keys=pattern['total_keys'],
+                tags_config=pattern['tags_config'],
+                description=pattern['description']
+            )
+            
+            try:
+                # Validate memory requirements
+                can_run, reason = self.validate_memory_requirements(scenario)
+                if not can_run:
+                    monitor.log(f"  ⚠️  Skipping: {reason}")
+                    fuzzy_results.append({
+                        'scenario_name': pattern['name'],
+                        'description': pattern['description'],
+                        'total_keys': pattern['total_keys'],
+                        'skipped': True,
+                        'reason': reason,
+                        'estimated_memory_kb': 0,
+                        'actual_memory_kb': 0,
+                        'accuracy_ratio': 0
+                    })
+                    continue
+                
+                monitor.log(f"  ✅ Memory validation passed")
+                
+                # Get memory estimation BEFORE running the test
+                estimated_stats = self._calculate_estimated_stats(scenario)
+                estimated_memory = self.calculate_comprehensive_memory(
+                    total_keys=scenario.total_keys,
+                    unique_tags=estimated_stats['unique_tags'],
+                    avg_tag_length=estimated_stats['avg_tag_length'],
+                    avg_tags_per_key=estimated_stats['avg_tags_per_key'],
+                    avg_keys_per_tag=estimated_stats['avg_keys_per_tag'],
+                    vector_dims=8,
+                    hnsw_m=16
+                )
+                
+                monitor.log(f"  📊 Estimated total memory: {estimated_memory['total_estimated_kb']:,} KB")
+                monitor.log(f"     • Tag index: {estimated_memory['tag_index_kb']:,} KB")
+                monitor.log(f"     • Vector index: {estimated_memory['vector_index_kb']:,} KB")
+                
+                # Run the actual benchmark
+                monitor.log(f"  🚀 Running actual benchmark...")
+                benchmark_result = self.run_benchmark_scenario(scenario, monitor, use_async)
+                
+                if benchmark_result.get('skipped'):
+                    fuzzy_results.append({
+                        'scenario_name': pattern['name'],
+                        'description': pattern['description'],
+                        'total_keys': pattern['total_keys'],
+                        'skipped': True,
+                        'reason': benchmark_result.get('reason', 'Unknown'),
+                        'estimated_memory_kb': estimated_memory['total_estimated_kb'],
+                        'actual_memory_kb': 0,
+                        'accuracy_ratio': 0
+                    })
+                    continue
+                
+                # Extract actual memory usage
+                actual_memory_kb = benchmark_result.get('search_used_memory_kb', 0)
+                
+                # Calculate accuracy
+                if actual_memory_kb > 0:
+                    accuracy_ratio = estimated_memory['total_estimated_kb'] / actual_memory_kb
+                else:
+                    accuracy_ratio = 0
+                
+                monitor.log(f"  📈 Actual memory usage: {actual_memory_kb:,} KB")
+                monitor.log(f"  🎯 Accuracy ratio: {accuracy_ratio:.2f}x")
+                
+                if 0.5 <= accuracy_ratio <= 2.0:
+                    monitor.log(f"  ✅ Good accuracy (within 2x)")
+                elif accuracy_ratio < 0.5:
+                    monitor.log(f"  ⚠️  Underestimation (>{accuracy_ratio:.1f}x too low)")
+                else:
+                    monitor.log(f"  ⚠️  Overestimation ({accuracy_ratio:.1f}x too high)")
+                
+                # Store detailed results
+                fuzzy_result = {
+                    'scenario_name': pattern['name'],
+                    'description': pattern['description'],
+                    'total_keys': pattern['total_keys'],
+                    'skipped': False,
+                    'estimated_memory_kb': estimated_memory['total_estimated_kb'],
+                    'estimated_tag_index_kb': estimated_memory['tag_index_kb'],
+                    'estimated_vector_index_kb': estimated_memory['vector_index_kb'],
+                    'actual_memory_kb': actual_memory_kb,
+                    'accuracy_ratio': accuracy_ratio,
+                    'insertion_time_sec': benchmark_result.get('insertion_time_sec', 0),
+                    'keys_per_second': benchmark_result.get('keys_per_second', 0),
+                    'unique_tags': estimated_stats['unique_tags'],
+                    'avg_tags_per_key': estimated_stats['avg_tags_per_key'],
+                    'avg_tag_length': estimated_stats['avg_tag_length']
+                }
+                fuzzy_results.append(fuzzy_result)
+                
+                # Write to CSV incrementally
+                self.append_fuzzy_to_csv(csv_filename, fuzzy_result, monitor, write_header=(i == 0))
+                
+            except Exception as e:
+                monitor.log(f"  ❌ Pattern failed: {e}")
+                fuzzy_results.append({
+                    'scenario_name': pattern['name'],
+                    'description': pattern['description'],
+                    'total_keys': pattern['total_keys'],
+                    'skipped': True,
+                    'reason': f"Error: {str(e)}",
+                    'estimated_memory_kb': 0,
+                    'actual_memory_kb': 0,
+                    'accuracy_ratio': 0
+                })
+        
+        # Analyze fuzzy results
+        self._analyze_fuzzy_results(fuzzy_results, monitor)
+        
+        monitor.log(f"\n📁 Fuzzy results CSV: {csv_filename}")
+        monitor.log(f"📝 Log file: {log_file}")
+        monitor.stop()
+    
+    def _calculate_estimated_stats(self, scenario: BenchmarkScenario) -> dict:
+        """Calculate estimated statistics for a scenario"""
+        tags_config = scenario.tags_config
+        
+        # Calculate average tags per key
+        avg_tags_per_key = tags_config.tags_per_key.avg
+        
+        # Calculate unique tags based on sharing mode
+        if tags_config.sharing.mode == TagSharingMode.UNIQUE:
+            unique_tags = scenario.total_keys * avg_tags_per_key
+        elif tags_config.sharing.mode == TagSharingMode.PERFECT_OVERLAP:
+            unique_tags = avg_tags_per_key  # All keys share same tags
+        elif tags_config.sharing.mode == TagSharingMode.SHARED_POOL:
+            unique_tags = tags_config.sharing.pool_size
+        elif tags_config.sharing.mode == TagSharingMode.GROUP_BASED:
+            num_groups = scenario.total_keys // tags_config.sharing.keys_per_group
+            unique_tags = num_groups * tags_config.sharing.tags_per_group
+        else:
+            unique_tags = scenario.total_keys * avg_tags_per_key * 0.3  # Default estimate
+        
+        # Calculate keys per tag
+        total_tag_instances = scenario.total_keys * avg_tags_per_key
+        avg_keys_per_tag = total_tag_instances / max(1, unique_tags)
+        
+        return {
+            'unique_tags': int(unique_tags),
+            'avg_tags_per_key': avg_tags_per_key,
+            'avg_keys_per_tag': avg_keys_per_tag,
+            'avg_tag_length': tags_config.tag_length.avg
+        }
+    
+    def append_fuzzy_to_csv(self, filename: str, result: dict, monitor, write_header=False):
+        """Append fuzzy test result to CSV file"""
+        import csv
+        
+        fieldnames = [
+            'scenario_name', 'description', 'total_keys', 'skipped', 'reason',
+            'estimated_memory_kb', 'estimated_tag_index_kb', 'estimated_vector_index_kb',
+            'actual_memory_kb', 'accuracy_ratio', 'insertion_time_sec', 'keys_per_second',
+            'unique_tags', 'avg_tags_per_key', 'avg_tag_length'
+        ]
+        
+        try:
+            mode = 'w' if write_header else 'a'
+            with open(filename, mode, newline='', encoding='utf-8') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                if write_header:
+                    writer.writeheader()
+                
+                # Fill missing fields with defaults
+                csv_result = {field: result.get(field, '') for field in fieldnames}
+                writer.writerow(csv_result)
+                
+        except Exception as e:
+            monitor.log(f"⚠️ CSV write failed: {e}")
+    
+    def _analyze_fuzzy_results(self, results: list, monitor):
+        """Analyze and summarize fuzzy test results"""
+        monitor.log("")
+        monitor.log("🎯 FUZZY ESTIMATION ANALYSIS")
+        monitor.log("=" * 80)
+        
+        # Filter non-skipped results
+        valid_results = [r for r in results if not r.get('skipped', True) and r.get('accuracy_ratio', 0) > 0]
+        
+        if not valid_results:
+            monitor.log("❌ No valid results to analyze")
+            return
+        
+        # Calculate statistics
+        accuracies = [r['accuracy_ratio'] for r in valid_results]
+        mean_accuracy = statistics.mean(accuracies)
+        median_accuracy = statistics.median(accuracies)
+        min_accuracy = min(accuracies)
+        max_accuracy = max(accuracies)
+        
+        # Count accuracy ranges
+        excellent = sum(1 for a in accuracies if 0.8 <= a <= 1.2)  # Within ±20%
+        good = sum(1 for a in accuracies if 0.5 <= a <= 2.0)       # Within 2x
+        poor = len(accuracies) - good
+        
+        monitor.log(f"📊 Patterns Analyzed: {len(valid_results)}")
+        monitor.log(f"📈 Mean Accuracy: {mean_accuracy:.2f}x")
+        monitor.log(f"📊 Median Accuracy: {median_accuracy:.2f}x")
+        monitor.log(f"📉 Range: {min_accuracy:.2f}x - {max_accuracy:.2f}x")
+        monitor.log("")
+        monitor.log(f"✅ Excellent (±20%): {excellent}/{len(valid_results)} ({excellent/len(valid_results):.1%})")
+        monitor.log(f"🟡 Good (within 2x): {good}/{len(valid_results)} ({good/len(valid_results):.1%})")
+        monitor.log(f"🔴 Poor (>2x off): {poor}/{len(valid_results)} ({poor/len(valid_results):.1%})")
+        monitor.log("")
+        
+        # Best and worst cases
+        best = max(valid_results, key=lambda r: 1/abs(r['accuracy_ratio'] - 1.0))
+        worst = min(valid_results, key=lambda r: 1/abs(r['accuracy_ratio'] - 1.0))
+        
+        monitor.log(f"🏆 Best Case: {best['scenario_name']} ({best['accuracy_ratio']:.2f}x)")
+        monitor.log(f"   {best['description']}")
+        monitor.log(f"   Estimated: {best['estimated_memory_kb']:,} KB, Actual: {best['actual_memory_kb']:,} KB")
+        monitor.log("")
+        monitor.log(f"⚠️  Worst Case: {worst['scenario_name']} ({worst['accuracy_ratio']:.2f}x)")
+        monitor.log(f"   {worst['description']}")
+        monitor.log(f"   Estimated: {worst['estimated_memory_kb']:,} KB, Actual: {worst['actual_memory_kb']:,} KB")
+        monitor.log("")
+        
+        # Overall assessment
+        if mean_accuracy >= 0.8 and mean_accuracy <= 1.2 and excellent/len(valid_results) >= 0.6:
+            monitor.log("🎉 EXCELLENT: Memory estimation is highly accurate!")
+        elif mean_accuracy >= 0.5 and mean_accuracy <= 2.0 and good/len(valid_results) >= 0.7:
+            monitor.log("✅ GOOD: Memory estimation is reasonably accurate")
+        else:
+            monitor.log("⚠️ NEEDS IMPROVEMENT: Memory estimation accuracy should be enhanced")
+        
+        monitor.log("")
