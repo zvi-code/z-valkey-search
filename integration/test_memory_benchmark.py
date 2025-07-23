@@ -884,10 +884,16 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor = ProgressMonitor(self.server, scenario.name)
             monitor.start()
             should_stop_monitor = True
-        monitor.log(f"{'*'*80}STARTING SCENARIO {scenario.name} - {scenario.description}")
+        monitor.log("")
+        monitor.log("┏" + "━" * 78 + "┓")
+        monitor.log(f"┃ 🚀 STARTING SCENARIO: {scenario.name:<50} ┃")
+        monitor.log(f"┃    {scenario.description:<65} ┃")
+        monitor.log("┗" + "━" * 78 + "┛")
+        monitor.log("")
+        
         # Validate memory requirements before starting
         can_run, message = self.validate_memory_requirements(scenario)
-        monitor.log(f"Memory validation: {message}")
+        monitor.log(f"📋 Memory Validation: {message}")
         
         if not can_run:
             monitor.error(f"❌ Skipping scenario due to memory constraints")
@@ -917,19 +923,25 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             
             # Measure baseline
             baseline_memory = client.info("memory")['used_memory']
-            monitor.log(f"  Baseline memory: {baseline_memory // 1024:,} KB")
-            state_name = "Baseline memory:"
             info_all = client.execute_command("info","memory")
-            monitor.log(f"{state_name}:used_memory_human={info_all['used_memory_human']}")           
             search_info = client.execute_command("info","modules")
-            monitor.log(f"{state_name}:search_used_memory_human={search_info['search_used_memory_human']}")  
+            
+            monitor.log("📊 BASELINE MEASUREMENTS")
+            monitor.log("─" * 50)
+            monitor.log(f"💾 System Memory: {info_all['used_memory_human']}")
+            monitor.log(f"🔍 Search Memory: {search_info['search_used_memory_human']}")
+            monitor.log(f"📈 Baseline: {baseline_memory // 1024:,} KB")
+            monitor.log("")
+            
             # Log memory estimates
             estimates = self.estimate_memory_usage(scenario)
-            monitor.log(f"  Estimated memory usage:")
-            monitor.log(f"    - Data: {estimates['data_memory'] // (1024**2):,} MB")
-            monitor.log(f"    - Tag index: {estimates['tag_index_memory'] // (1024**2):,} MB")
-            monitor.log(f"    - Vector index: {estimates['vector_index_memory'] // (1024**2):,} MB")
-            monitor.log(f"    - Total (with overhead): {estimates['total_memory'] // (1024**2):,} MB")
+            monitor.log("🎯 ESTIMATED USAGE")
+            monitor.log("─" * 50)
+            monitor.log(f"📁 Data Memory:      {estimates['data_memory'] // (1024**2):,} MB")
+            monitor.log(f"🏷️  Tag Index:       {estimates['tag_index_memory'] // (1024**2):,} MB")  
+            monitor.log(f"🎯 Vector Index:     {estimates['vector_index_memory'] // (1024**2):,} MB")
+            monitor.log(f"💰 Total (overhead): {estimates['total_memory'] // (1024**2):,} MB")
+            monitor.log("")
             
             # Create schema and generator
             index_name = f"idx_{scenario.name.lower().replace(' ', '_')}"
@@ -946,15 +958,19 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             
             generator = HashKeyGenerator(config)
             
-            # Calculate data generation and insertion
-            monitor.log(f"  Generating {scenario.total_keys:,} keys with {scenario.description}")
-            
             # Create client pool for parallel insertion
             num_threads = min(64, max(2, scenario.total_keys // config.batch_size))
             client_pool = SilentClientPool(self.server, num_threads)
             
             # Create distribution collector
             dist_collector = DistributionCollector()
+            
+            monitor.log("⚡ DATA INSERTION PHASE")
+            monitor.log("─" * 50)  
+            monitor.log(f"📝 Generating: {scenario.total_keys:,} keys")
+            monitor.log(f"🧵 Threads: {num_threads}")
+            monitor.log(f"📦 Batch size: {config.batch_size:,}")
+            monitor.log("")
             
             # Insert data using generator with parallel processing
             insertion_start_time = time.time()
@@ -1035,35 +1051,45 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             
             insertion_time = time.time() - insertion_start_time
             total_keys_inserted = keys_processed.get()
-            monitor.log(f"  ✓ Data insertion complete: {total_keys_inserted:,} keys in {insertion_time:.1f}s "
-                       f"({total_keys_inserted/insertion_time:.0f} keys/sec) using {num_threads} threads")
-            state_name = "Data insertion complete:"
             info_all = client.execute_command("info","memory")
-            monitor.log(f"{state_name}:used_memory_human={info_all['used_memory_human']}")           
             search_info = client.execute_command("info","modules")
-            monitor.log(f"{state_name}:search_used_memory_human={search_info['search_used_memory_human']}")  
+            
+            monitor.log("✅ INSERTION COMPLETE")
+            monitor.log("─" * 50)
+            monitor.log(f"📊 Keys Inserted: {total_keys_inserted:,}")
+            monitor.log(f"⏱️  Time Taken: {insertion_time:.1f}s")
+            monitor.log(f"🚀 Speed: {total_keys_inserted/insertion_time:.0f} keys/sec")
+            monitor.log(f"💾 System Memory: {info_all['used_memory_human']}")
+            monitor.log(f"🔍 Search Memory: {search_info['search_used_memory_human']}")
+            monitor.log("")
+            
             # Log distribution statistics
             dist_summary = dist_collector.get_summary()
-            monitor.log(f"  Distribution Statistics:")
-            monitor.log(f"    Tag Lengths: min={dist_summary['tag_lengths']['min']}, "
+            monitor.log("📈 DATA DISTRIBUTION STATS")
+            monitor.log("─" * 50)
+            monitor.log(f"🏷️  Tag Lengths: min={dist_summary['tag_lengths']['min']}, "
                        f"max={dist_summary['tag_lengths']['max']}, "
-                       f"mean={dist_summary['tag_lengths']['mean']:.1f}, "
+                       f"avg={dist_summary['tag_lengths']['mean']:.1f}, "
                        f"p95={dist_summary['tag_lengths']['p95']}")
-            monitor.log(f"    Tags per Key: min={dist_summary['tags_per_key']['min']}, "
+            monitor.log(f"📝 Tags/Key: min={dist_summary['tags_per_key']['min']}, "
                        f"max={dist_summary['tags_per_key']['max']}, "
-                       f"mean={dist_summary['tags_per_key']['mean']:.1f}, "
+                       f"avg={dist_summary['tags_per_key']['mean']:.1f}, "
                        f"p95={dist_summary['tags_per_key']['p95']}")
-            monitor.log(f"    Tag Usage: {dist_summary['tag_usage']['unique_tags']} unique tags, "
-                       f"mean keys/tag={dist_summary['tag_usage']['mean_keys_per_tag']:.1f}, "
+            monitor.log(f"🔄 Tag Reuse: {dist_summary['tag_usage']['unique_tags']} unique tags, "
+                       f"avg keys/tag={dist_summary['tag_usage']['mean_keys_per_tag']:.1f}, "
                        f"max={dist_summary['tag_usage']['max_keys_per_tag']}")
+            monitor.log("")
             
             # Measure memory after data insertion
             data_memory = client.info("memory")['used_memory']
             data_memory_kb = (data_memory - baseline_memory) // 1024
-            monitor.log(f"  Valkey data memory (no index): {data_memory_kb:,} KB")
             
-            # Create index
-            monitor.log(f"  Creating index '{index_name}' and waiting for indexing...")
+            monitor.log("🏗️  INDEX CREATION PHASE")
+            monitor.log("─" * 50)
+            monitor.log(f"📊 Data Memory (no index): {data_memory_kb:,} KB")
+            monitor.log(f"🏷️  Index Name: {index_name}")
+            monitor.log("")
+            
             monitor.set_index_name(index_name)
             
             cmd = generator.generate_ft_create_command()
@@ -1117,8 +1143,14 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 'keys_per_tag_p95': dist_stats['tag_usage']['p95_keys_per_tag']
             }
             
-            monitor.log(f"  Results: Data={data_memory_kb:,}KB, TagIndex={tag_index_memory_kb:,}KB, "
-                       f"Vector={vector_memory_kb:,}KB, Total={total_memory_kb:,}KB")
+            monitor.log("🎯 FINAL RESULTS")
+            monitor.log("─" * 50)
+            monitor.log(f"📁 Data Memory:      {data_memory_kb:,} KB")
+            monitor.log(f"🏷️  Tag Index:       {tag_index_memory_kb:,} KB")  
+            monitor.log(f"🎯 Vector Index:     {vector_memory_kb:,} KB")
+            monitor.log(f"📈 Index Overhead:   {index_overhead_kb:,} KB")
+            monitor.log(f"💰 Total Memory:     {total_memory_kb:,} KB")
+            monitor.log("")
             
             # Save detailed distribution data
             detailed_dists = dist_collector.get_detailed_distributions()
@@ -1338,13 +1370,15 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 self.append_to_csv(csv_filename, failed_result, monitor, write_header=(i == 0))
                 continue
         
-        # Print summary table
-        monitor.log("="*120)
-        monitor.log("COMPREHENSIVE BENCHMARK RESULTS SUMMARY")
-        monitor.log("="*120)
+        # Print summary table  
+        monitor.log("")
+        monitor.log("┏" + "━" * 118 + "┓")
+        monitor.log("┃" + " " * 35 + "📊 COMPREHENSIVE BENCHMARK RESULTS" + " " * 48 + "┃")
+        monitor.log("┗" + "━" * 118 + "┛")
+        monitor.log("")
         
         monitor.log(f"{'Scenario':<30} {'Keys':>8} {'DataKB':>10} {'TagIdxKB':>10} {'TotalKB':>10} {'Time(s)':>8} {'Mode':<15}")
-        monitor.log("-" * 120)
+        monitor.log("─" * 120)
         
         for r in results:
             if r.get('skipped'):
@@ -1365,9 +1399,11 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                             f"{r['tags_config']:<15}")
         
         # Analyze results by category
-        monitor.log("="*80)
-        monitor.log("KEY FINDINGS")
-        monitor.log("="*80)
+        monitor.log("")
+        monitor.log("┏" + "━" * 78 + "┓")
+        monitor.log("┃" + " " * 32 + "🔍 KEY FINDINGS" + " " * 31 + "┃")
+        monitor.log("┗" + "━" * 78 + "┛")
+        monitor.log("")
         
         # Find extremes (excluding skipped scenarios)
         baseline = next((r for r in results if 'Baseline' in r['scenario_name'] and not r.get('skipped')), None)
@@ -1484,9 +1520,11 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 continue
         
         # Quick summary
-        monitor.log("" + "="*80)
-        monitor.log("QUICK BENCHMARK SUMMARY")
-        monitor.log("="*80)
+        monitor.log("")
+        monitor.log("┏" + "━" * 78 + "┓")
+        monitor.log("┃" + " " * 28 + "⚡ QUICK BENCHMARK SUMMARY" + " " * 24 + "┃")
+        monitor.log("┗" + "━" * 78 + "┛")
+        monitor.log("")
         for r in results:
             if r.get('skipped'):
                 monitor.log(f"{r['scenario_name']:<20}: SKIPPED - {r.get('reason', 'Unknown')}")
