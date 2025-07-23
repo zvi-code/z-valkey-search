@@ -18,6 +18,7 @@ class ValkeySearchTestCaseBase(ValkeyTestCase):
         loadmodule = f"{os.getenv('MODULE_PATH')} --loadmodule {os.getenv('JSON_MODULE_PATH')}"
         args = {
             "enable-debug-command": "yes",
+            "save": "",
             "loadmodule": loadmodule,
         }
         server_path = os.getenv("VALKEY_SERVER_PATH")

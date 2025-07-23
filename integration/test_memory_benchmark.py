@@ -29,6 +29,10 @@ from valkey import ResponseError
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 
+# Suppress client logging
+import contextlib
+import io
+
 # Import our hash generator components
 from hash_generator import (
     HashKeyGenerator, HashGeneratorConfig, IndexSchema, FieldSchema,
@@ -40,6 +44,132 @@ from tags_builder import (
 from string_generator import (
     LengthConfig, PrefixConfig, Distribution, StringType
 )
+
+
+class SilentValkeyClient(Valkey):
+    """
+    A Valkey client wrapper that suppresses client creation logs.
+    Intercepts and redirects specific log messages to avoid cluttering test logs.
+    """
+    
+    def __init__(self, *args, **kwargs):
+        # Save original logging state for multiple loggers
+        original_levels = {}
+        loggers_to_silence = [
+            '',  # root logger
+            'valkey',
+            'valkey.client',
+            'valkey.connection',
+            'valkey_search',
+            'valkey_search_test_case',
+            'ValkeySearchTestCaseBase',
+            __name__  # current module logger
+        ]
+        
+        # Disable all potentially noisy loggers
+        for logger_name in loggers_to_silence:
+            logger = logging.getLogger(logger_name)
+            original_levels[logger_name] = logger.level
+            logger.setLevel(logging.CRITICAL)
+        
+        # Also temporarily disable all handlers
+        original_root_handlers = logging.root.handlers[:]
+        null_handler = logging.NullHandler()
+        
+        # Save original stdout/stderr in case client prints directly
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        
+        try:
+            # Replace root handlers with null handler
+            logging.root.handlers = [null_handler]
+            
+            # Redirect stdout/stderr to null
+            sys.stdout = io.StringIO()
+            sys.stderr = io.StringIO()
+            
+            # Create the client
+            super().__init__(*args, **kwargs)
+            
+        finally:
+            # Restore stdout/stderr
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+            
+            # Restore original logging configuration
+            logging.root.handlers = original_root_handlers
+            
+            # Restore all logger levels
+            for logger_name, level in original_levels.items():
+                logger = logging.getLogger(logger_name)
+                logger.setLevel(level)
+
+
+class SilentClientPool:
+    """Custom client pool that uses SilentValkeyClient to suppress logging"""
+    
+    def __init__(self, server, pool_size: int):
+        self.server = server
+        self.pool_size = pool_size
+        self.clients = []
+        self.lock = threading.Lock()
+        self.thread_local = threading.local()
+        
+        # Pre-create all clients using our silent wrapper
+        for i in range(pool_size):
+            client = self._create_silent_client()
+            self.clients.append(client)
+    
+    def _create_silent_client(self) -> SilentValkeyClient:
+        """Create a new client with logging suppressed"""
+        # Get connection info from server
+        if hasattr(self.server, 'get_new_client'):
+            # Temporarily suppress logging while getting connection params
+            original_level = logging.getLogger().level
+            logging.getLogger().setLevel(logging.CRITICAL)
+            
+            try:
+                # Get a regular client first to extract connection params
+                temp_client = self.server.get_new_client()
+                connection_kwargs = temp_client.connection_pool.connection_kwargs
+                temp_client.close()
+            finally:
+                # Restore logging level
+                logging.getLogger().setLevel(original_level)
+            
+            # Create our silent client with the same params
+            return SilentValkeyClient(**connection_kwargs)
+        else:
+            # Fallback: create with default params
+            return SilentValkeyClient(host='localhost', port=6379, decode_responses=True)
+    
+    def get_client_for_thread(self, thread_index: int) -> SilentValkeyClient:
+        """Get a dedicated client for a specific thread index"""
+        if thread_index >= self.pool_size:
+            raise ValueError(f"Thread index {thread_index} exceeds pool size {self.pool_size}")
+        return self.clients[thread_index]
+    
+    def get_client(self) -> SilentValkeyClient:
+        """Get a client - backward compatibility method that uses thread-local storage"""
+        if hasattr(self.thread_local, 'client'):
+            return self.thread_local.client
+        
+        thread_id = threading.get_ident()
+        client_index = thread_id % self.pool_size
+        self.thread_local.client = self.clients[client_index]
+        return self.thread_local.client
+    
+    def return_client(self, client: SilentValkeyClient):
+        """Return a client to the pool - no-op for thread-indexed clients"""
+        pass
+    
+    def close_all(self):
+        """Close all clients in the pool"""
+        for client in self.clients:
+            try:
+                client.close()
+            except:
+                pass
 
 
 @dataclass
@@ -179,53 +309,6 @@ class BenchmarkScenario:
     description: str
 
 
-class ClientPool:
-    """Thread-indexed pool of Valkey clients for multi-threaded operations"""
-    
-    def __init__(self, server, pool_size: int):
-        self.server = server
-        self.pool_size = pool_size
-        self.clients = []
-        self.lock = threading.Lock()
-        self.thread_local = threading.local()
-        
-        # Pre-create all clients
-        for i in range(pool_size):
-            client = self.server.get_new_client()
-            self.clients.append(client)
-    
-    def get_client_for_thread(self, thread_index: int) -> Valkey:
-        """Get a dedicated client for a specific thread index"""
-        if thread_index >= self.pool_size:
-            raise ValueError(f"Thread index {thread_index} exceeds pool size {self.pool_size}")
-        return self.clients[thread_index]
-    
-    def get_client(self) -> Valkey:
-        """Get a client - backward compatibility method that uses thread-local storage"""
-        # Check if we already have a client assigned to this thread
-        if hasattr(self.thread_local, 'client'):
-            return self.thread_local.client
-        
-        # Assign a client based on thread ID hash for deterministic assignment
-        import threading
-        thread_id = threading.get_ident()
-        client_index = thread_id % self.pool_size
-        self.thread_local.client = self.clients[client_index]
-        return self.thread_local.client
-    
-    def return_client(self, client: Valkey):
-        """Return a client to the pool - no-op for thread-indexed clients"""
-        # In thread-indexed mode, clients are not returned, they stay with their threads
-        pass
-    
-    def close_all(self):
-        """Close all clients in the pool"""
-        for client in self.clients:
-            try:
-                client.close()
-            except:
-                pass
-
 
 class ThreadSafeCounter:
     """Thread-safe counter for progress tracking"""
@@ -288,8 +371,17 @@ class ProgressMonitor:
         
     def log(self, message: str):
         """Add a message to be printed by the monitoring thread"""
+        # Add thread ID for debugging
+        thread_id = threading.get_ident()
+        thread_name = threading.current_thread().name
+        timestamped_message = f"[Thread-{thread_id}|{thread_name}] {message}"
+        
         with self.lock:
-            self.messages.append(message)
+            self.messages.append(timestamped_message)
+    
+    def error(self, message: str):
+        """Add an error message to be printed by the monitoring thread"""
+        self.log(f"❌ ERROR: {message}")
             
     def set_index_name(self, index_name: str):
         """Add an index name to monitor for indexing progress"""
@@ -324,34 +416,61 @@ class ProgressMonitor:
         """Update the current operation status"""
         with self.lock:
             self.current_status.update(status_dict)
+    
+    def _create_silent_client(self) -> SilentValkeyClient:
+        """Create a silent client for monitoring"""
+        if hasattr(self.server, 'get_new_client'):
+            # Temporarily suppress logging while getting connection params
+            original_level = logging.getLogger().level
+            logging.getLogger().setLevel(logging.CRITICAL)
+            
+            try:
+                # Get a regular client first to extract connection params
+                temp_client = self.server.get_new_client()
+                connection_kwargs = temp_client.connection_pool.connection_kwargs
+                temp_client.close()
+            finally:
+                # Restore logging level
+                logging.getLogger().setLevel(original_level)
+            
+            # Create our silent client with the same params
+            return SilentValkeyClient(**connection_kwargs)
+        else:
+            # Fallback: create with default params
+            return SilentValkeyClient(host='localhost', port=6379, decode_responses=True)
             
     def _monitor(self):
         """Background monitoring loop"""
         last_report = time.time()
-        client: Valkey = self.server.get_new_client()
+        # Create a silent client to avoid logging noise
+        client = self._create_silent_client()
         logging.info(f"📊 Monitoring started for: {self.operation_name}")
         
         while self.running:
             try:
                 current_time = time.time()
                 elapsed = current_time - self.start_time
-                
                 # Print any queued messages immediately
                 with self.lock:
                     while self.messages:
                         message = self.messages.pop(0)
                         logging.info(message)
                         sys.stdout.flush()
-                
+
                 # Report system stats every 5 seconds
                 if current_time - last_report >= 5.0:
+                    state_name = "monitoring:"
+                    info_all = client.execute_command("info","memory")
+                    self.log(f"{state_name}:used_memory_human={info_all['used_memory_human']}")           
+                    search_info = client.execute_command("info","modules")
+                    self.log(f"{state_name}:search_used_memory_human={search_info['search_used_memory_human']}")  
                     # Get memory info
                     memory_info = client.info("memory")
                     current_memory_kb = memory_info['used_memory'] // 1024
                     memory_delta = current_memory_kb - self.last_memory
                     
                     # Get key count from db info
-                    db_info = client.info("keyspace")
+                    db_info = client.execute_command("info","keyspace")
                     current_keys = 0
                     if 'db0' in db_info and isinstance(db_info['db0'], dict) and 'keys' in db_info['db0']:
                         current_keys = db_info['db0']['keys']
@@ -442,37 +561,76 @@ class ProgressMonitor:
                 sys.stdout.flush()
                 
             time.sleep(1)  # Check every second for messages, report every 5 seconds
+        with self.lock:
+            while self.messages:
+                message = self.messages.pop(0)
+                logging.info(message)
+                sys.stdout.flush()
 
 
 class TestMemoryBenchmark(ValkeySearchTestCaseBase):
     """Comprehensive Tag Index memory benchmarking using hash_generator"""
+    
+    def get_silent_client(self) -> SilentValkeyClient:
+        """Create a new silent client that suppresses logging"""
+        if hasattr(self.server, 'get_new_client'):
+            # Temporarily suppress logging while getting connection params
+            original_level = logging.getLogger().level
+            logging.getLogger().setLevel(logging.CRITICAL)
+            
+            try:
+                # Get a regular client first to extract connection params
+                temp_client = self.server.get_new_client()
+                connection_kwargs = temp_client.connection_pool.connection_kwargs
+                temp_client.close()
+            finally:
+                # Restore logging level
+                logging.getLogger().setLevel(original_level)
+            
+            # Create our silent client with the same params
+            return SilentValkeyClient(**connection_kwargs)
+        else:
+            # Fallback: create with default params
+            return SilentValkeyClient(host='localhost', port=6379, decode_responses=True)
     
     def setup_file_logging(self, test_name: str) -> str:
         """Set up file logging for the test with timestamps"""
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         log_filename = f"memory_benchmark_{test_name}_{timestamp}.log"
         
-        # Create a file handler
-        file_handler = logging.FileHandler(log_filename)
+        # Get root logger
+        root_logger = logging.getLogger()
+        
+        # Remove existing file handlers to avoid duplicates
+        existing_file_handlers = [h for h in root_logger.handlers if isinstance(h, logging.FileHandler)]
+        for handler in existing_file_handlers:
+            root_logger.removeHandler(handler)
+            handler.close()
+        
+        # Create a file handler with thread-safe settings
+        file_handler = logging.FileHandler(log_filename, mode='a', encoding='utf-8')
         file_handler.setLevel(logging.INFO)
         
-        # Create formatter with timestamp
+        # Create formatter with timestamp and thread info
         formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', 
                                     datefmt='%Y-%m-%d %H:%M:%S')
         file_handler.setFormatter(formatter)
         
         # Add handler to root logger
-        logging.getLogger().addHandler(file_handler)
+        root_logger.addHandler(file_handler)
         
         # Also update console output to include timestamps
-        for handler in logging.getLogger().handlers:
+        for handler in root_logger.handlers:
             if isinstance(handler, logging.StreamHandler) and handler != file_handler:
                 handler.setFormatter(formatter)
+        
+        # Set root logger level to ensure all messages are captured
+        root_logger.setLevel(logging.INFO)
         
         logging.info(f"Starting {test_name} - Log file: {log_filename}")
         return log_filename
     
-    def append_to_csv(self, csv_filename: str, result: Dict, write_header: bool = False):
+    def append_to_csv(self, csv_filename: str, result: Dict, monitor: ProgressMonitor = None, write_header: bool = False):
         """Append a result to CSV file incrementally"""
         # Add timestamp to the result
         result['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -491,7 +649,11 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             # Write the data row
             f.write(','.join(str(result.get(h, '')) for h in headers) + '\n')
         
-        logging.info(f"Results appended to {csv_filename}")
+        # Log through monitor if available, otherwise use direct logging
+        if monitor:
+            monitor.log(f"Results appended to {csv_filename}")
+        else:
+            logging.info(f"Results appended to {csv_filename}")
     
     def get_available_memory_bytes(self) -> int:
         """Get available memory on the system in bytes"""
@@ -610,13 +772,17 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             ]
         )
     
-    def verify_server_connection(self, client: Valkey) -> bool:
+    def verify_server_connection(self, client: Valkey, monitor: ProgressMonitor = None) -> bool:
         """Verify that the server is responding"""
         try:
             client.ping()
             return True
         except Exception as e:
-            logging.info(f"❌ Server connection failed: {e}")
+            error_msg = f"❌ Server connection failed: {e}"
+            if monitor:
+                monitor.log(error_msg)
+            else:
+                logging.info(error_msg)
             return False
     
     def wait_for_indexing(self, client: Valkey, index_name: str, expected_docs: int, 
@@ -636,10 +802,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 key = info[i].decode() if isinstance(info[i], bytes) else str(info[i])
                 value = info[i+1]
                 if isinstance(value, bytes):
-                    try:
-                        value = value.decode()
-                    except:
-                        pass
+                    value = value.decode()
                 info_dict[key] = value
             
             num_docs = int(info_dict.get('num_docs', 0))
@@ -654,7 +817,11 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             # Get memory info
             memory_info = client.info("memory")
             current_memory_kb = memory_info['used_memory'] // 1024
-            
+            state_name = "Index is still processing:"
+            info_all = client.execute_command("info","memory")
+            monitor.log(f"{state_name}:used_memory_human={info_all['used_memory_human']}")           
+            search_info = client.execute_command("info","modules")
+            monitor.log(f"{state_name}:search_used_memory_human={search_info['search_used_memory_human']}")
             # Calculate indexing rate
             current_time = time.time()
             elapsed = current_time - start_time
@@ -676,11 +843,10 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 if backfill_in_progress > 0:
                     status += f", Backfill: {backfill_complete_percent:.1f}%"
                 
-                logging.info(f"    Search Index: {num_docs:,}/{expected_docs:,} docs ({progress_pct:.1f}%) | "
+                monitor.log(f"    Search Index: {num_docs:,}/{expected_docs:,} docs ({progress_pct:.1f}%) | "
                         f"{docs_per_sec:.0f} docs/sec | Memory: {current_memory_kb:,} KB | "
                         f"{status} | ETA: {eta_str}")
                 sys.stdout.flush()  # Ensure immediate output
-                
                 last_report_time = current_time
                 last_doc_count = num_docs
             
@@ -688,26 +854,43 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             if num_docs >= expected_docs and not indexing and state == "ready":
                 total_time = time.time() - start_time
                 avg_docs_per_sec = num_docs / total_time if total_time > 0 else 0
-                logging.info(f"    ✓ Search indexing complete: {num_docs:,} docs indexed in {total_time:.1f}s "
+                monitor.log(f"    ✓ Search indexing complete: {num_docs:,} docs indexed in {total_time:.1f}s "
                         f"(avg {avg_docs_per_sec:.0f} docs/sec)")
-                logging.info(f"    ✓ Final memory usage: {current_memory_kb:,} KB")
-                logging.info(f"    ✓ Index state: {state}, queue: {mutation_queue_size}, backfill: {backfill_complete_percent:.1f}%")
+                monitor.log(f"    ✓ Final memory usage: {current_memory_kb:,} KB")
+                monitor.log(f"    ✓ Index state: {state}, queue: {mutation_queue_size}, backfill: {backfill_complete_percent:.1f}%")
+                state_name = "Indexing DONE:"
+                info_all = client.execute_command("info","memory")
+                monitor.log(f"{state_name}:used_memory_human={info_all['used_memory_human']}")           
+                search_info = client.execute_command("info","modules")
+                monitor.log(f"{state_name}:search_used_memory_human={search_info['search_used_memory_human']}")                
                 sys.stdout.flush()  # Ensure immediate output
                 return
                 
             time.sleep(1)  # Check every 1 second for more responsive monitoring
-        
-        logging.info(f"    ⚠ Warning: Indexing timeout after {timeout}s, proceeding anyway")
+
+        monitor.log(f"    ⚠ Warning: Indexing timeout after {timeout}s, proceeding anyway")
+        state_name = "Indexing NOT DONE:"
+        info_all = client.execute_command("info","memory")
+        monitor.log(f"{state_name}:used_memory_human={info_all['used_memory_human']}")           
+        search_info = client.execute_command("info","modules")
+        monitor.log(f"{state_name}:search_used_memory_human={search_info['search_used_memory_human']}")  
         sys.stdout.flush()  # Ensure immediate output
     
-    def run_benchmark_scenario(self, scenario: BenchmarkScenario) -> Dict:
+    def run_benchmark_scenario(self, scenario: BenchmarkScenario, monitor: ProgressMonitor = None) -> Dict:
         """Run a single benchmark scenario with full monitoring"""
+        # Use provided monitor or create a new one if none provided
+        should_stop_monitor = False
+        if monitor is None:
+            monitor = ProgressMonitor(self.server, scenario.name)
+            monitor.start()
+            should_stop_monitor = True
+        monitor.log(f"{'*'*80}STARTING SCENARIO {scenario.name} - {scenario.description}")
         # Validate memory requirements before starting
         can_run, message = self.validate_memory_requirements(scenario)
-        logging.info(f"Memory validation: {message}")
+        monitor.log(f"Memory validation: {message}")
         
         if not can_run:
-            logging.error(f"❌ Skipping scenario due to memory constraints")
+            monitor.error(f"❌ Skipping scenario due to memory constraints")
             return {
                 'scenario_name': scenario.name,
                 'description': scenario.description,
@@ -716,16 +899,16 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 'reason': message
             }
         
-        monitor = ProgressMonitor(self.server, scenario.name)
-        monitor.start()
+
         
         # Get main client
-        client = self.server.get_new_client()
+        client = self.get_silent_client()
         
         try:
             # Verify server connection
-            if not self.verify_server_connection(client):
-                monitor.stop()
+            if not self.verify_server_connection(client, monitor):
+                if should_stop_monitor:
+                    monitor.stop()
                 raise RuntimeError(f"Failed to connect to valkey server for scenario {scenario.name}")
             
             # Clean up any existing data
@@ -735,7 +918,11 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             # Measure baseline
             baseline_memory = client.info("memory")['used_memory']
             monitor.log(f"  Baseline memory: {baseline_memory // 1024:,} KB")
-            
+            state_name = "Baseline memory:"
+            info_all = client.execute_command("info","memory")
+            monitor.log(f"{state_name}:used_memory_human={info_all['used_memory_human']}")           
+            search_info = client.execute_command("info","modules")
+            monitor.log(f"{state_name}:search_used_memory_human={search_info['search_used_memory_human']}")  
             # Log memory estimates
             estimates = self.estimate_memory_usage(scenario)
             monitor.log(f"  Estimated memory usage:")
@@ -764,7 +951,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             
             # Create client pool for parallel insertion
             num_threads = min(64, max(2, scenario.total_keys // config.batch_size))
-            client_pool = ClientPool(self.server, num_threads)
+            client_pool = SilentClientPool(self.server, num_threads)
             
             # Create distribution collector
             dist_collector = DistributionCollector()
@@ -772,7 +959,14 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             # Insert data using generator with parallel processing
             insertion_start_time = time.time()
             keys_processed = ThreadSafeCounter(0)
-            
+            # info_all = client.execute_command("info","memory")
+            # for key, value in info_all.items():
+            #     if "_human" in key:
+            #         monitor.log(f"ZZZZZZZZZZZZZZZZZZZZZZZ{key}: {value}")
+            # search_info = client.execute_command("info","smodules")
+            # for key, value in search_info.items():
+            #     if "search_" in key and value != 0:
+            #         monitor.log(f"ZZZZZZZZZZZZZZZZZZZZZZZ{key}: {value}")
             # Process batches with thread pool
             def process_batch(batch_data: List[Tuple[str, Dict[str, Any]]], thread_id: int) -> Tuple[int, float]:
                 """Process a batch of keys in a worker thread"""
@@ -816,7 +1010,11 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             
             # Execute parallel insertion
             monitor.log(f"  Starting data ingestion: {scenario.total_keys:,} keys using {num_threads} threads")
-            
+            state_name = "Starting data ingestion:"
+            info_all = client.execute_command("info","memory")
+            monitor.log(f"{state_name}:used_memory_human={info_all['used_memory_human']}")           
+            search_info = client.execute_command("info","modules")
+            monitor.log(f"{state_name}:search_used_memory_human={search_info['search_used_memory_human']}")  
             with ThreadPoolExecutor(max_workers=num_threads, thread_name_prefix="ValKeyIngest") as executor:
                 futures = []
                 batch_id = 0
@@ -839,7 +1037,11 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             total_keys_inserted = keys_processed.get()
             monitor.log(f"  ✓ Data insertion complete: {total_keys_inserted:,} keys in {insertion_time:.1f}s "
                        f"({total_keys_inserted/insertion_time:.0f} keys/sec) using {num_threads} threads")
-            
+            state_name = "Data insertion complete:"
+            info_all = client.execute_command("info","memory")
+            monitor.log(f"{state_name}:used_memory_human={info_all['used_memory_human']}")           
+            search_info = client.execute_command("info","modules")
+            monitor.log(f"{state_name}:search_used_memory_human={search_info['search_used_memory_human']}")  
             # Log distribution statistics
             dist_summary = dist_collector.get_summary()
             monitor.log(f"  Distribution Statistics:")
@@ -868,8 +1070,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             client.execute_command(*cmd.split())
             
             # Wait for indexing
-            self.wait_for_indexing(client, index_name, scenario.total_keys, monitor)
-            
+            self.wait_for_indexing(client, index_name, scenario.total_keys, monitor)            
             # Measure final memory
             final_memory = client.info("memory")['used_memory']
             total_memory_kb = (final_memory - baseline_memory) // 1024
@@ -877,7 +1078,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             
             # Get search module info
             try:
-                search_info = client.info("SEARCH")
+                search_info = client.execute_command("info","modules")
                 search_memory_kb = search_info.get('search_used_memory_bytes', 0) // 1024
             except:
                 search_memory_kb = index_overhead_kb
@@ -943,7 +1144,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         finally:
             # Clean up resources
             client_pool.close_all()
-            monitor.stop()
+            # Only stop monitor if we created it
+            if should_stop_monitor:
+                monitor.stop()
         
         return result
     
@@ -1082,23 +1285,24 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         """Run comprehensive memory benchmark with all sharing patterns"""
         # Set up file logging
         log_file = self.setup_file_logging("comprehensive")
-        
-        logging.info("=== COMPREHENSIVE MEMORY BENCHMARK ===")
-        logging.info("Testing various tag sharing patterns and configurations\n")
+        monitor = ProgressMonitor(self.server, "comprehensive")
+        monitor.start()
+        monitor.log("=== COMPREHENSIVE MEMORY BENCHMARK ===")
+        monitor.log("Testing various tag sharing patterns and configurations\n")
         
         # Log system memory information
         if PSUTIL_AVAILABLE:
             memory = psutil.virtual_memory()
-            logging.info(f"System Memory Status:")
-            logging.info(f"  - Total: {memory.total / (1024**3):.1f} GB")
-            logging.info(f"  - Available: {memory.available / (1024**3):.1f} GB")
-            logging.info(f"  - Used: {memory.percent:.1f}%")
-            logging.info(f"  - Memory limit for tests: {memory.available * 0.5 / (1024**3):.1f} GB (50% of available)\n")
+            monitor.log(f"System Memory Status:")
+            monitor.log(f"  - Total: {memory.total / (1024**3):.1f} GB")
+            monitor.log(f"  - Available: {memory.available / (1024**3):.1f} GB")
+            monitor.log(f"  - Used: {memory.percent:.1f}%")
+            monitor.log(f"  - Memory limit for tests: {memory.available * 0.5 / (1024**3):.1f} GB (50% of available)\n")
         else:
             available_bytes = self.get_available_memory_bytes()
-            logging.info(f"System Memory Status (limited info - psutil not available):")
-            logging.info(f"  - Available: {available_bytes / (1024**3):.1f} GB")
-            logging.info(f"  - Memory limit for tests: {available_bytes * 0.5 / (1024**3):.1f} GB (50% of available)\n")
+            monitor.log(f"System Memory Status (limited info - psutil not available):")
+            monitor.log(f"  - Available: {available_bytes / (1024**3):.1f} GB")
+            monitor.log(f"  - Memory limit for tests: {available_bytes * 0.5 / (1024**3):.1f} GB (50% of available)\n")
         
         # Create scenarios
         scenarios = self.create_comprehensive_scenarios(base_keys=1000000)
@@ -1110,16 +1314,18 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         # Run each scenario
         for i, scenario in enumerate(scenarios):
-            logging.info(f"\n--- Scenario {i+1}/{len(scenarios)}: {scenario.name} ---")
+            monitor.log(f"--- Scenario {i+1}/{len(scenarios)}: {scenario.name} ---")
             try:
-                result = self.run_benchmark_scenario(scenario)
+                monitor.log(f"  Description: {scenario.description}")
+                # monitor.stop()
+                result = self.run_benchmark_scenario(scenario, monitor)
                 results.append(result)
-                
+                # monitor.start()
                 # Append to CSV incrementally (write header only for first result)
-                self.append_to_csv(csv_filename, result, write_header=(i == 0))
+                self.append_to_csv(csv_filename, result, monitor, write_header=(i == 0))
                 
             except Exception as e:
-                logging.error(f"  ❌ Scenario failed: {e}")
+                monitor.error(f"  ❌ Scenario failed: {e}")
                 # Log failed scenario to CSV as well
                 failed_result = {
                     'scenario_name': scenario.name,
@@ -1129,20 +1335,20 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                     'reason': f"Failed: {str(e)}"
                 }
                 results.append(failed_result)
-                self.append_to_csv(csv_filename, failed_result, write_header=(i == 0))
+                self.append_to_csv(csv_filename, failed_result, monitor, write_header=(i == 0))
                 continue
         
         # Print summary table
-        logging.info("\n" + "="*120)
-        logging.info("COMPREHENSIVE BENCHMARK RESULTS SUMMARY")
-        logging.info("="*120)
+        monitor.log("="*120)
+        monitor.log("COMPREHENSIVE BENCHMARK RESULTS SUMMARY")
+        monitor.log("="*120)
         
-        logging.info(f"{'Scenario':<30} {'Keys':>8} {'DataKB':>10} {'TagIdxKB':>10} {'TotalKB':>10} {'Time(s)':>8} {'Mode':<15}")
-        logging.info("-" * 120)
+        monitor.log(f"{'Scenario':<30} {'Keys':>8} {'DataKB':>10} {'TagIdxKB':>10} {'TotalKB':>10} {'Time(s)':>8} {'Mode':<15}")
+        monitor.log("-" * 120)
         
         for r in results:
             if r.get('skipped'):
-                logging.info(f"{r['scenario_name']:<30} "
+                monitor.log(f"{r['scenario_name']:<30} "
                             f"{r['total_keys']:>8,} "
                             f"{'SKIPPED':>10} "
                             f"{'':>10} "
@@ -1150,7 +1356,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                             f"{'':>8} "
                             f"Memory limit exceeded")
             else:
-                logging.info(f"{r['scenario_name']:<30} "
+                monitor.log(f"{r['scenario_name']:<30} "
                             f"{r['total_keys']:>8,} "
                             f"{r['data_memory_kb']:>10,} "
                             f"{r['tag_index_memory_kb']:>10,} "
@@ -1159,9 +1365,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                             f"{r['tags_config']:<15}")
         
         # Analyze results by category
-        logging.info("\n" + "="*80)
-        logging.info("KEY FINDINGS")
-        logging.info("="*80)
+        monitor.log("="*80)
+        monitor.log("KEY FINDINGS")
+        monitor.log("="*80)
         
         # Find extremes (excluding skipped scenarios)
         baseline = next((r for r in results if 'Baseline' in r['scenario_name'] and not r.get('skipped')), None)
@@ -1169,41 +1375,45 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         if baseline and perfect:
             savings = (baseline['tag_index_memory_kb'] - perfect['tag_index_memory_kb']) / baseline['tag_index_memory_kb'] * 100
-            logging.info(f"\nTag Sharing Impact:")
-            logging.info(f"  - Unique tags (baseline): {baseline['tag_index_memory_kb']:,} KB")
-            logging.info(f"  - Perfect overlap: {perfect['tag_index_memory_kb']:,} KB")
-            logging.info(f"  - Memory savings: {savings:.1f}%")
+            monitor.log(f"Tag Sharing Impact:")
+            monitor.log(f"  - Unique tags (baseline): {baseline['tag_index_memory_kb']:,} KB")
+            monitor.log(f"  - Perfect overlap: {perfect['tag_index_memory_kb']:,} KB")
+            monitor.log(f"  - Memory savings: {savings:.1f}%")
         
         # Group-based analysis
         group_results = [r for r in results if 'GroupBased' in r['scenario_name'] and not r.get('skipped')]
         if group_results:
-            logging.info(f"\nGroup-based Sharing:")
+            monitor.log(f"Group-based Sharing:")
             for r in sorted(group_results, key=lambda x: x['scenario_name']):
-                logging.info(f"  - {r['description']}: {r['tag_index_memory_kb']:,} KB")
+                monitor.log(f"  - {r['description']}: {r['tag_index_memory_kb']:,} KB")
+
+        monitor.log(f"Detailed results saved to {csv_filename}")
+        monitor.log(f"Log file: {log_file}")
         
-        logging.info(f"\nDetailed results saved to {csv_filename}")
-        logging.info(f"Log file: {log_file}")
+        # Stop the main monitor
+        monitor.stop()
     
     def test_quick_memory_benchmark(self):
         """Quick benchmark with smaller dataset"""
         # Set up file logging
         log_file = self.setup_file_logging("quick")
-        
-        logging.info("=== QUICK MEMORY BENCHMARK (10K keys) ===")
+        monitor = ProgressMonitor(self.server, "quick")
+        monitor.start()
+        monitor.log("=== QUICK MEMORY BENCHMARK (10K keys) ===")
         
         # Log system memory information
         if PSUTIL_AVAILABLE:
             memory = psutil.virtual_memory()
-            logging.info(f"System Memory Status:")
-            logging.info(f"  - Total: {memory.total / (1024**3):.1f} GB")
-            logging.info(f"  - Available: {memory.available / (1024**3):.1f} GB")
-            logging.info(f"  - Used: {memory.percent:.1f}%")
-            logging.info(f"  - Memory limit for tests: {memory.available * 0.5 / (1024**3):.1f} GB (50% of available)\n")
+            monitor.log(f"System Memory Status:")
+            monitor.log(f"  - Total: {memory.total / (1024**3):.1f} GB")
+            monitor.log(f"  - Available: {memory.available / (1024**3):.1f} GB")
+            monitor.log(f"  - Used: {memory.percent:.1f}%")
+            monitor.log(f"  - Memory limit for tests: {memory.available * 0.5 / (1024**3):.1f} GB (50% of available)\n")
         else:
             available_bytes = self.get_available_memory_bytes()
-            logging.info(f"System Memory Status (limited info - psutil not available):")
-            logging.info(f"  - Available: {available_bytes / (1024**3):.1f} GB")
-            logging.info(f"  - Memory limit for tests: {available_bytes * 0.5 / (1024**3):.1f} GB (50% of available)\n")
+            monitor.log(f"System Memory Status (limited info - psutil not available):")
+            monitor.log(f"  - Available: {available_bytes / (1024**3):.1f} GB")
+            monitor.log(f"  - Memory limit for tests: {available_bytes * 0.5 / (1024**3):.1f} GB (50% of available)\n")
         
         # CSV filename with timestamp
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -1251,16 +1461,17 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         results = []
         for i, scenario in enumerate(scenarios):
-            logging.info(f"\nRunning: {scenario.name}")
+            monitor.log(f"Running: {scenario.name}")
             try:
-                result = self.run_benchmark_scenario(scenario)
+                #monitor.stop()
+                result = self.run_benchmark_scenario(scenario, monitor)
                 results.append(result)
-                
+                #monitor.start()
                 # Append to CSV incrementally
-                self.append_to_csv(csv_filename, result, write_header=(i == 0))
+                self.append_to_csv(csv_filename, result, monitor, write_header=(i == 0))
                 
             except Exception as e:
-                logging.error(f"  ❌ Scenario failed: {e}")
+                monitor.error(f"  ❌ Scenario failed: {e}")
                 failed_result = {
                     'scenario_name': scenario.name,
                     'description': scenario.description,
@@ -1269,18 +1480,21 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                     'reason': f"Failed: {str(e)}"
                 }
                 results.append(failed_result)
-                self.append_to_csv(csv_filename, failed_result, write_header=(i == 0))
+                self.append_to_csv(csv_filename, failed_result, monitor, write_header=(i == 0))
                 continue
         
         # Quick summary
-        logging.info("\n" + "="*80)
-        logging.info("QUICK BENCHMARK SUMMARY")
-        logging.info("="*80)
+        monitor.log("" + "="*80)
+        monitor.log("QUICK BENCHMARK SUMMARY")
+        monitor.log("="*80)
         for r in results:
             if r.get('skipped'):
-                logging.info(f"{r['scenario_name']:<20}: SKIPPED - {r.get('reason', 'Unknown')}")
+                monitor.log(f"{r['scenario_name']:<20}: SKIPPED - {r.get('reason', 'Unknown')}")
             else:
-                logging.info(f"{r['scenario_name']:<20}: {r['tag_index_memory_kb']:>8,} KB tag index")
+                monitor.log(f"{r['scenario_name']:<20}: {r['tag_index_memory_kb']:>8,} KB tag index")
         
-        logging.info(f"\nResults saved to {csv_filename}")
-        logging.info(f"Log file: {log_file}")
+        monitor.log(f"Results saved to {csv_filename}")
+        monitor.log(f"Log file: {log_file}")
+        
+        # Stop the main monitor
+        monitor.stop()
