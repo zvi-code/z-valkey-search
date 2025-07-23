@@ -11,6 +11,7 @@ import time
 import struct
 import threading
 import logging
+import asyncio
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Iterator, Any, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,6 +28,7 @@ except ImportError:
 
 from valkey import ResponseError
 from valkey.client import Valkey
+from valkey.asyncio import Valkey as AsyncValkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 
 # Suppress client logging
@@ -103,6 +105,124 @@ class SilentValkeyClient(Valkey):
             for logger_name, level in original_levels.items():
                 logger = logging.getLogger(logger_name)
                 logger.setLevel(level)
+
+
+class AsyncSilentValkeyClient(AsyncValkey):
+    """
+    An async Valkey client wrapper that suppresses client creation logs.
+    Provides high-performance async I/O operations.
+    """
+    
+    def __init__(self, *args, **kwargs):
+        # Save original logging state for multiple loggers
+        original_levels = {}
+        loggers_to_silence = [
+            '',  # root logger
+            'valkey',
+            'valkey.client',
+            'valkey.connection',
+            'valkey_search',
+            'valkey_search_test_case',
+            'ValkeySearchTestCaseBase',
+            __name__  # current module logger
+        ]
+        
+        # Disable all potentially noisy loggers
+        for logger_name in loggers_to_silence:
+            logger = logging.getLogger(logger_name)
+            original_levels[logger_name] = logger.level
+            logger.setLevel(logging.CRITICAL)
+        
+        # Also temporarily disable all handlers
+        original_root_handlers = logging.root.handlers[:]
+        null_handler = logging.NullHandler()
+        
+        # Save original stdout/stderr in case client prints directly
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        
+        try:
+            # Replace root handlers with null handler
+            logging.root.handlers = [null_handler]
+            
+            # Redirect stdout/stderr to null
+            sys.stdout = io.StringIO()
+            sys.stderr = io.StringIO()
+            
+            # Create the async client
+            super().__init__(*args, **kwargs)
+            
+        finally:
+            # Restore stdout/stderr
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+            
+            # Restore original logging configuration
+            logging.root.handlers = original_root_handlers
+            
+            # Restore all logger levels
+            for logger_name, level in original_levels.items():
+                logger = logging.getLogger(logger_name)
+                logger.setLevel(level)
+
+
+class AsyncSilentClientPool:
+    """Async client pool that uses AsyncSilentValkeyClient for high-performance operations"""
+    
+    def __init__(self, server, pool_size: int, max_concurrent_per_client: int = 10):
+        self.server = server
+        self.pool_size = pool_size
+        self.clients = []
+        self.semaphores = []  # One semaphore per client to limit concurrent ops
+        self.max_concurrent_per_client = max_concurrent_per_client
+        self.lock = asyncio.Lock()
+        
+    async def initialize(self):
+        """Initialize all async clients - must be called in async context"""
+        for i in range(self.pool_size):
+            client = await self._create_silent_async_client()
+            semaphore = asyncio.Semaphore(self.max_concurrent_per_client)
+            self.clients.append(client)
+            self.semaphores.append(semaphore)
+    
+    async def _create_silent_async_client(self) -> AsyncSilentValkeyClient:
+        """Create a new async client with logging suppressed"""
+        if hasattr(self.server, 'get_new_client'):
+            # Temporarily suppress logging while getting connection params
+            original_level = logging.getLogger().level
+            logging.getLogger().setLevel(logging.CRITICAL)
+            
+            try:
+                # Get connection params from sync client
+                temp_client = self.server.get_new_client()
+                connection_kwargs = temp_client.connection_pool.connection_kwargs.copy()
+                temp_client.close()
+            finally:
+                # Restore logging level
+                logging.getLogger().setLevel(original_level)
+            
+            # Remove sync-specific params and add async-specific ones
+            connection_kwargs.pop('connection_pool', None)
+            connection_kwargs.pop('connection_class', None)
+            
+            # Create async client with extracted params
+            return AsyncSilentValkeyClient(**connection_kwargs)
+        else:
+            # Fallback: create with default params
+            return AsyncSilentValkeyClient(host='localhost', port=6379, decode_responses=True)
+    
+    def get_client_for_task(self, task_id: int) -> tuple[AsyncSilentValkeyClient, asyncio.Semaphore]:
+        """Get a client and its semaphore for a specific task ID"""
+        client_id = task_id % self.pool_size
+        return self.clients[client_id], self.semaphores[client_id]
+    
+    async def close_all(self):
+        """Close all async clients in the pool"""
+        for client in self.clients:
+            try:
+                await client.aclose()
+            except:
+                pass
 
 
 class SilentClientPool:
@@ -571,6 +691,80 @@ class ProgressMonitor:
 class TestMemoryBenchmark(ValkeySearchTestCaseBase):
     """Comprehensive Tag Index memory benchmarking using hash_generator"""
     
+    async def run_async_insertion(self, scenario: BenchmarkScenario, generator, monitor: ProgressMonitor, 
+                                  insertion_start_time: float, keys_processed: ThreadSafeCounter, 
+                                  dist_collector: DistributionCollector, config) -> float:
+        """Run async insertion for maximum performance"""
+        
+        # Create async client pool with optimal client-to-task ratio
+        num_tasks = min(200, max(20, scenario.total_keys // config.batch_size))  # Many concurrent tasks
+        num_clients = min(20, max(5, num_tasks // 10))  # Fewer clients, shared among tasks
+        async_client_pool = AsyncSilentClientPool(self.server, num_clients)
+        await async_client_pool.initialize()
+        
+        monitor.log(f"🚀 Using ASYNC I/O: {num_tasks} concurrent tasks sharing {num_clients} clients")
+        
+        async def process_batch_async(batch_data: List[Tuple[str, Dict[str, Any]]], task_id: int) -> Tuple[int, float]:
+            """Process a batch of keys asynchronously"""
+            async_client, semaphore = async_client_pool.get_client_for_task(task_id)
+            
+            # Use semaphore to limit concurrent operations per client
+            async with semaphore:
+                batch_start = time.time()
+                async_pipe = async_client.pipeline(transaction=False)
+                
+                for key, fields in batch_data:
+                    async_pipe.hset(key, mapping=fields)
+                    
+                    # Collect distribution statistics (thread-safe)
+                    if 'tags' in fields:
+                        dist_collector.process_key(key, fields['tags'])
+                
+                await async_pipe.execute()
+                batch_time = time.time() - batch_start
+            
+            # Update progress counter
+            processed_count = keys_processed.increment(len(batch_data))
+            
+            # Update monitor status periodically
+            if processed_count % (config.batch_size * 10) == 0 or processed_count >= scenario.total_keys:
+                current_time = time.time()
+                elapsed_time = current_time - insertion_start_time
+                progress_pct = (processed_count / scenario.total_keys) * 100
+                keys_per_sec = processed_count / elapsed_time if elapsed_time > 0 else 0
+                
+                eta_seconds = (scenario.total_keys - processed_count) / keys_per_sec if keys_per_sec > 0 else 0
+                eta_str = f"{eta_seconds/60:.1f}m" if eta_seconds > 60 else f"{eta_seconds:.0f}s"
+                
+                monitor.update_status({
+                    "Phase": "Async Insertion",
+                    "Progress": f"{processed_count:,}/{scenario.total_keys:,} ({progress_pct:.1f}%)",
+                    "Speed": f"{keys_per_sec:.0f} keys/sec",
+                    "Tasks": f"{num_tasks} async",
+                    "ETA": eta_str
+                })
+            
+            return len(batch_data), batch_time
+        
+        # Create all async tasks
+        tasks = []
+        task_id = 0
+        
+        for batch in generator:
+            task = asyncio.create_task(process_batch_async(batch, task_id % num_tasks))
+            tasks.append(task)
+            task_id += 1
+        
+        # Wait for all tasks to complete
+        try:
+            await asyncio.gather(*tasks)
+        except Exception as e:
+            monitor.log(f"❌ Async batch failed: {e}")
+        finally:
+            await async_client_pool.close_all()
+        
+        return time.time() - insertion_start_time
+
     def get_silent_client(self) -> SilentValkeyClient:
         """Create a new silent client that suppresses logging"""
         if hasattr(self.server, 'get_new_client'):
@@ -876,7 +1070,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         monitor.log(f"{state_name}:search_used_memory_human={search_info['search_used_memory_human']}")  
         sys.stdout.flush()  # Ensure immediate output
     
-    def run_benchmark_scenario(self, scenario: BenchmarkScenario, monitor: ProgressMonitor = None) -> Dict:
+    def run_benchmark_scenario(self, scenario: BenchmarkScenario, monitor: ProgressMonitor = None, use_async: bool = True) -> Dict:
         """Run a single benchmark scenario with full monitoring"""
         # Use provided monitor or create a new one if none provided
         should_stop_monitor = False
@@ -968,21 +1162,17 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log("⚡ DATA INSERTION PHASE")
             monitor.log("─" * 50)  
             monitor.log(f"📝 Generating: {scenario.total_keys:,} keys")
-            monitor.log(f"🧵 Threads: {num_threads}")
+            if use_async:
+                num_tasks = min(100, max(10, scenario.total_keys // config.batch_size))
+                monitor.log(f"🚀 Mode: ASYNC I/O with {num_tasks} concurrent tasks")
+            else:
+                monitor.log(f"🧵 Mode: SYNC with {num_threads} threads")
             monitor.log(f"📦 Batch size: {config.batch_size:,}")
             monitor.log("")
             
             # Insert data using generator with parallel processing
             insertion_start_time = time.time()
-            keys_processed = ThreadSafeCounter(0)
-            # info_all = client.execute_command("info","memory")
-            # for key, value in info_all.items():
-            #     if "_human" in key:
-            #         monitor.log(f"ZZZZZZZZZZZZZZZZZZZZZZZ{key}: {value}")
-            # search_info = client.execute_command("info","smodules")
-            # for key, value in search_info.items():
-            #     if "search_" in key and value != 0:
-            #         monitor.log(f"ZZZZZZZZZZZZZZZZZZZZZZZ{key}: {value}")
+            keys_processed = ThreadSafeCounter(0)           
             # Process batches with thread pool
             def process_batch(batch_data: List[Tuple[str, Dict[str, Any]]], thread_id: int) -> Tuple[int, float]:
                 """Process a batch of keys in a worker thread"""
@@ -1024,32 +1214,43 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 
                 return len(batch_data), batch_time
             
-            # Execute parallel insertion
-            monitor.log(f"  Starting data ingestion: {scenario.total_keys:,} keys using {num_threads} threads")
-            state_name = "Starting data ingestion:"
-            info_all = client.execute_command("info","memory")
-            monitor.log(f"{state_name}:used_memory_human={info_all['used_memory_human']}")           
-            search_info = client.execute_command("info","modules")
-            monitor.log(f"{state_name}:search_used_memory_human={search_info['search_used_memory_human']}")  
-            with ThreadPoolExecutor(max_workers=num_threads, thread_name_prefix="ValKeyIngest") as executor:
-                futures = []
-                batch_id = 0
-                
-                for batch in generator:
-                    future = executor.submit(process_batch, batch, batch_id % num_threads)
-                    futures.append(future)
-                    batch_id += 1
-                
-                # Wait for all batches to complete
-                completed_batches = 0
-                for future in as_completed(futures):
-                    try:
-                        batch_keys, batch_time = future.result()
-                        completed_batches += 1
-                    except Exception as e:
-                        monitor.log(f"  ❌ Batch failed: {e}")
+            # Choose insertion method based on use_async parameter
+            if use_async:
+                # Use async I/O for maximum performance
+                monitor.log("🚀 Starting ASYNC data ingestion")
+                try:
+                    insertion_time = asyncio.run(
+                        self.run_async_insertion(scenario, generator, monitor, insertion_start_time, 
+                                               keys_processed, dist_collector, config)
+                    )
+                except Exception as e:
+                    monitor.log(f"❌ Async insertion failed, falling back to sync: {e}")
+                    use_async = False
             
-            insertion_time = time.time() - insertion_start_time
+            if not use_async:
+                # Use traditional threaded approach
+                monitor.log(f"🧵 Starting SYNC data ingestion: {scenario.total_keys:,} keys using {num_threads} threads")
+                
+                with ThreadPoolExecutor(max_workers=num_threads, thread_name_prefix="ValKeyIngest") as executor:
+                    futures = []
+                    batch_id = 0
+                    
+                    for batch in generator:
+                        future = executor.submit(process_batch, batch, batch_id % num_threads)
+                        futures.append(future)
+                        batch_id += 1
+                    
+                    # Wait for all batches to complete
+                    completed_batches = 0
+                    for future in as_completed(futures):
+                        try:
+                            batch_keys, batch_time = future.result()
+                            completed_batches += 1
+                        except Exception as e:
+                            monitor.log(f"❌ Batch failed: {e}")
+                
+                insertion_time = time.time() - insertion_start_time
+            
             total_keys_inserted = keys_processed.get()
             info_all = client.execute_command("info","memory")
             search_info = client.execute_command("info","modules")
@@ -1313,7 +1514,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         return scenarios
     
-    def test_comprehensive_memory_benchmark(self):
+    def test_comprehensive_memory_benchmark(self, use_async: bool = True):
         """Run comprehensive memory benchmark with all sharing patterns"""
         # Set up file logging
         log_file = self.setup_file_logging("comprehensive")
@@ -1350,7 +1551,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             try:
                 monitor.log(f"  Description: {scenario.description}")
                 # monitor.stop()
-                result = self.run_benchmark_scenario(scenario, monitor)
+                result = self.run_benchmark_scenario(scenario, monitor, use_async)
                 results.append(result)
                 # monitor.start()
                 # Append to CSV incrementally (write header only for first result)
@@ -1429,7 +1630,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         # Stop the main monitor
         monitor.stop()
     
-    def test_quick_memory_benchmark(self):
+    def test_quick_memory_benchmark(self, use_async: bool = True):
         """Quick benchmark with smaller dataset"""
         # Set up file logging
         log_file = self.setup_file_logging("quick")
@@ -1500,7 +1701,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log(f"Running: {scenario.name}")
             try:
                 #monitor.stop()
-                result = self.run_benchmark_scenario(scenario, monitor)
+                result = self.run_benchmark_scenario(scenario, monitor, use_async)
                 results.append(result)
                 #monitor.start()
                 # Append to CSV incrementally
@@ -1535,4 +1736,80 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         monitor.log(f"Log file: {log_file}")
         
         # Stop the main monitor
+        monitor.stop()
+    
+    def test_async_performance_comparison(self):
+        """Compare async vs sync performance on the same scenario"""
+        # Set up file logging
+        log_file = self.setup_file_logging("performance_comparison")
+        monitor = ProgressMonitor(self.server, "performance_comparison")
+        monitor.start()
+        
+        monitor.log("")
+        monitor.log("┏" + "━" * 78 + "┓")
+        monitor.log("┃" + " " * 25 + "🏁 ASYNC vs SYNC PERFORMANCE TEST" + " " * 18 + "┃")
+        monitor.log("┗" + "━" * 78 + "┛")
+        monitor.log("")
+        
+        # Create a test scenario
+        test_scenario = BenchmarkScenario(
+            name="Performance_Test",
+            total_keys=50000,  # Medium-sized test
+            tags_config=TagsConfig(
+                num_keys=50000,
+                tags_per_key=TagDistribution(avg=5, min=3, max=8),
+                tag_length=LengthConfig(avg=20, min=10, max=30),
+                sharing=TagSharingConfig(mode=TagSharingMode.SHARED_POOL, pool_size=1000)
+            ),
+            description="Async vs Sync performance comparison"
+        )
+        
+        results = []
+        
+        # Test ASYNC mode
+        monitor.log("🚀 TESTING ASYNC MODE")
+        monitor.log("─" * 50)
+        try:
+            async_result = self.run_benchmark_scenario(test_scenario, monitor, use_async=True)
+            async_result['mode'] = 'ASYNC'
+            results.append(async_result)
+        except Exception as e:
+            monitor.log(f"❌ Async test failed: {e}")
+        
+        monitor.log("")
+        
+        # Test SYNC mode  
+        monitor.log("🧵 TESTING SYNC MODE")
+        monitor.log("─" * 50)
+        try:
+            sync_result = self.run_benchmark_scenario(test_scenario, monitor, use_async=False)
+            sync_result['mode'] = 'SYNC'
+            results.append(sync_result)
+        except Exception as e:
+            monitor.log(f"❌ Sync test failed: {e}")
+        
+        # Compare results
+        if len(results) == 2:
+            async_time = results[0]['insertion_time']
+            sync_time = results[1]['insertion_time']
+            
+            improvement = ((sync_time - async_time) / sync_time) * 100
+            speed_ratio = sync_time / async_time
+            
+            monitor.log("")
+            monitor.log("┏" + "━" * 78 + "┓")
+            monitor.log("┃" + " " * 30 + "📊 PERFORMANCE COMPARISON" + " " * 22 + "┃")
+            monitor.log("┗" + "━" * 78 + "┛")
+            monitor.log("")
+            monitor.log(f"🚀 Async Time:  {async_time:.2f}s")
+            monitor.log(f"🧵 Sync Time:   {sync_time:.2f}s")
+            monitor.log(f"📈 Improvement: {improvement:+.1f}% ({'faster' if improvement > 0 else 'slower'})")
+            monitor.log(f"⚡ Speed Ratio: {speed_ratio:.2f}x")
+            
+            if improvement > 0:
+                monitor.log(f"🏆 ASYNC IS FASTER by {improvement:.1f}%!")
+            else:
+                monitor.log(f"🐌 ASYNC IS SLOWER by {abs(improvement):.1f}%")
+        
+        monitor.log(f"\nLog file: {log_file}")
         monitor.stop()
