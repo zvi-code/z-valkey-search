@@ -824,6 +824,198 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         logging.info(f"Starting {test_name} - Log file: {log_filename}")
         return log_filename
     
+    def calculate_comprehensive_memory(self, total_keys, unique_tags, avg_tag_length, avg_tags_per_key, avg_keys_per_tag, vector_dims=8, hnsw_m=16):
+        """
+        Calculate comprehensive search module memory including all major components.
+        
+        Based on analysis of:
+        - src/indexes/tag.h, src/utils/patricia_tree.h, src/utils/string_interning.h  
+        - src/indexes/vector_base.h, vector_flat.h, third_party/hnswlib/
+        - Valkey core memory patterns
+        
+        Args:
+            total_keys: Total number of keys
+            unique_tags: Number of unique tag strings
+            avg_tag_length: Average length of tag strings
+            avg_tags_per_key: Average tags per key
+            avg_keys_per_tag: Average keys per tag (sharing factor)
+            vector_dims: Vector dimensions (default 8)
+        
+        Returns:
+            Dictionary with detailed memory breakdown in KB
+        """
+        
+        # === 1. VALKEY CORE OVERHEAD ===
+        # Valkey stores HASH keys with internal overhead
+        # Each key: hash table entry + key string + metadata
+        avg_key_length = 32  # estimate based on typical patterns
+        valkey_key_overhead = total_keys * (
+            32 +  # hash table entry overhead
+            avg_key_length + 8 +  # key string + length
+            16  # misc metadata per key
+        )
+        
+        # Hash field storage (tags + vector fields per key)
+        valkey_fields_overhead = total_keys * (
+            (avg_tags_per_key * avg_tag_length * 1.2) +  # tag data with overhead
+            (vector_dims * 4 * 1.1) +  # vector data with overhead
+            32  # field metadata
+        )
+        
+        valkey_memory = valkey_key_overhead + valkey_fields_overhead
+        
+        # === 2. TAG INDEX MEMORY ===
+        # String Interning (with better estimates)  
+        string_intern_overhead_per_string = 32  # InternedString + weak_ptr in global map
+        tag_interning_memory = unique_tags * (avg_tag_length + string_intern_overhead_per_string)
+        tag_interning_memory += unique_tags * 48  # global hash map overhead
+        
+        # Key interning (all keys are interned)
+        key_interning_memory = total_keys * (avg_key_length + string_intern_overhead_per_string)
+        key_interning_memory += total_keys * 48  # key interning map overhead
+        
+        # tracked_tags_by_keys_ (InternedStringMap<TagInfo>)
+        taginfo_per_key = (
+            16 +  # InternedStringPtr to raw_tag_string  
+            32 +  # flat_hash_set overhead for parsed tags
+            (avg_tags_per_key * 16)  # string_view per tag (ptr + size)
+        )
+        tracked_keys_memory = total_keys * (8 + taginfo_per_key + 16)  # map entry overhead
+        
+        # Patricia Tree (more accurate estimation)
+        # Tree nodes based on prefix patterns - heavily dependent on tag diversity
+        prefix_diversity_factor = min(2.0, avg_tag_length / 4.0)  # more characters = more nodes
+        estimated_tree_nodes = int(unique_tags * prefix_diversity_factor)
+        
+        patricia_node_memory = estimated_tree_nodes * (
+            48 +  # children map overhead (absl::flat_hash_map)
+            8 +   # subtree_values_count
+            16    # optional overhead
+        )
+        
+        # Leaf node values (flat_hash_set<InternedStringPtr> per unique tag)
+        patricia_values_memory = unique_tags * (
+            32 +  # flat_hash_set overhead
+            (avg_keys_per_tag * 8)  # InternedStringPtr per key
+        )
+        
+        patricia_tree_memory = patricia_node_memory + patricia_values_memory
+        
+        # untracked_keys_ set
+        untracked_keys_memory = total_keys * 0.1 * 24  # assume 10% untracked
+        
+        tag_index_memory = (
+            tag_interning_memory + 
+            tracked_keys_memory + 
+            patricia_tree_memory + 
+            untracked_keys_memory
+        )
+        
+        # === 3. VECTOR INDEX MEMORY ===
+        # The benchmark uses 8-dimensional vectors, but we need to determine if FLAT or HNSW is used
+        # For most benchmarks with small datasets, FLAT is typically used, but let's account for both
+        
+        # Common components for both algorithms:
+        # Vector data storage (ChunkedArray)
+        vector_data_size = total_keys * vector_dims * 4  # float32
+        
+        # tracked_metadata_by_key_ (key -> internal_id + magnitude mapping)
+        key_metadata_memory = total_keys * (
+            8 +   # key pointer in map
+            8 +   # internal_id (uint64_t)
+            4 +   # magnitude (float)
+            16    # map overhead per entry
+        )
+        
+        # key_by_internal_id_ reverse mapping
+        reverse_mapping_memory = total_keys * 24  # similar hash map overhead
+        
+        # FixedSizeAllocator for vector storage optimization  
+        allocator_overhead = max(1024, total_keys * 0.1)  # allocator bookkeeping
+        
+        # Algorithm-specific overhead (assume HNSW for more comprehensive estimation)
+        # Based on third_party/hnswlib/hnswalg.h analysis:
+        
+        # HNSW Graph Structure Memory:
+        # Each node has connections stored in link lists
+        M = hnsw_m  # M parameter (typically 16)
+        maxM0 = M * 2  # connections in layer 0 (typically 32)
+        
+        # data_level0_memory_ - ChunkedArray storing layer 0 data
+        # Each element: size_links_level0_ + sizeof(char*) + sizeof(labeltype)
+        size_links_level0 = maxM0 * 4 + 4  # maxM0 * sizeof(tableint) + sizeof(linklistsizeint)
+        size_data_per_element = size_links_level0 + 8 + 4  # + char* + labeltype
+        
+        data_level0_memory = total_keys * size_data_per_element
+        
+        # linkLists_ - ChunkedArray for higher level connections  
+        # Most nodes are only in level 0, but some have higher levels
+        # Estimate ~10% of nodes have level 1, ~1% have level 2, etc.
+        higher_level_nodes = int(total_keys * 0.1)  # rough estimate
+        size_links_per_element = M * 4 + 4  # M * sizeof(tableint) + sizeof(linklistsizeint)
+        higher_level_memory = higher_level_nodes * size_links_per_element
+        
+        # label_lookup_ mapping (unordered_map<labeltype, tableint>)
+        label_lookup_memory = total_keys * 24  # hash map overhead + key/value
+        
+        # element_levels_ vector (keeps level of each element)
+        element_levels_memory = total_keys * 4  # vector<int>
+        
+        # visited_list_pool_ for search operations
+        visited_list_pool_memory = max(1024, total_keys * 0.01)  # search working memory
+        
+        # Additional HNSW overhead: mutexes, atomics, deleted_elements tracking
+        hnsw_coordination_overhead = total_keys * 2  # various coordination structures
+        
+        vector_index_memory = (
+            vector_data_size +
+            key_metadata_memory +
+            reverse_mapping_memory +
+            allocator_overhead +
+            data_level0_memory +
+            higher_level_memory +
+            label_lookup_memory +
+            element_levels_memory +
+            visited_list_pool_memory +
+            hnsw_coordination_overhead
+        )
+        
+        # === 4. SEARCH MODULE OVERHEAD ===
+        # Index management, schema storage, coordination overhead
+        module_base_overhead = 8192  # base module structures
+        index_schema_overhead = 2048  # FT.CREATE schema storage
+        coordination_overhead = 1024  # various coordination structures
+        
+        search_module_overhead = module_base_overhead + index_schema_overhead + coordination_overhead
+        
+        # === 5. MEMORY FRAGMENTATION & ALIGNMENT ===
+        # Real allocators have significant overhead
+        total_allocated = valkey_memory + tag_index_memory + vector_index_memory + search_module_overhead
+        fragmentation_factor = 1.25  # 25% overhead typical for mixed allocation patterns
+        fragmentation_overhead = total_allocated * (fragmentation_factor - 1.0)
+        
+        # === SUMMARY ===
+        breakdown = {
+            'valkey_core_kb': int(valkey_memory // 1024),
+            'key_interning_kb': int(key_interning_memory // 1024),
+            'tag_index_kb': int(tag_index_memory // 1024),
+            'vector_index_kb': int(vector_index_memory // 1024), 
+            'search_module_overhead_kb': int(search_module_overhead // 1024),
+            'fragmentation_overhead_kb': int(fragmentation_overhead // 1024),
+            'total_estimated_kb': int((total_allocated + fragmentation_overhead) // 1024),
+            # Detailed vector breakdown for analysis
+            'vector_data_kb': int(vector_data_size // 1024),
+            'hnsw_level0_kb': int(data_level0_memory // 1024),
+            'hnsw_higher_levels_kb': int(higher_level_memory // 1024),
+            'vector_mappings_kb': int((key_metadata_memory + reverse_mapping_memory + label_lookup_memory) // 1024),
+            # HNSW configuration used
+            'hnsw_m': M,
+            'hnsw_maxM0': maxM0,
+            'connections_per_node_l0': maxM0
+        }
+        
+        return breakdown
+    
     def append_to_csv(self, csv_filename: str, result: Dict, monitor: ProgressMonitor = None, write_header: bool = False):
         """Append a result to CSV file incrementally"""
         # Add timestamp to the result
@@ -1310,12 +1502,30 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             except:
                 search_memory_kb = index_overhead_kb
             
-            # Calculate metrics
-            vector_memory_kb = (scenario.total_keys * 8 * 4) // 1024  # 8 dim * 4 bytes
-            tag_index_memory_kb = max(0, search_memory_kb - vector_memory_kb)
-            
-            # Include distribution statistics in results
+            # Get distribution statistics first
             dist_stats = dist_collector.get_summary()
+            
+            # Calculate metrics with improved tag index memory estimation
+            vector_memory_kb = (scenario.total_keys * 8 * 4) // 1024  # 8 dim * 4 bytes
+            
+            # Use comprehensive memory estimation based on all C++ structures
+            memory_breakdown = self.calculate_comprehensive_memory(
+                scenario.total_keys, 
+                dist_stats['tag_usage']['unique_tags'],
+                dist_stats['tag_lengths']['mean'],
+                dist_stats['tags_per_key']['mean'],
+                dist_stats['tag_usage']['mean_keys_per_tag'],
+                vector_dims=8
+            )
+            
+            # Extract components for comparison
+            estimated_total_kb = memory_breakdown['total_estimated_kb']
+            estimated_tag_memory_kb = memory_breakdown['tag_index_kb']
+            estimated_vector_memory_kb = memory_breakdown['vector_index_kb']
+            
+            # Compare with actual search memory usage
+            actual_tag_memory_kb = max(0, search_memory_kb - vector_memory_kb)
+            tag_index_memory_kb = actual_tag_memory_kb
             
             result = {
                 'scenario_name': scenario.name,
@@ -1325,9 +1535,19 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 'total_memory_kb': total_memory_kb,
                 'index_overhead_kb': index_overhead_kb,
                 'tag_index_memory_kb': tag_index_memory_kb,
+                'estimated_tag_memory_kb': estimated_tag_memory_kb,
+                'estimated_total_memory_kb': estimated_total_kb,
+                'estimated_vector_memory_kb': estimated_vector_memory_kb,
+                'tag_memory_accuracy': (estimated_tag_memory_kb / max(1, actual_tag_memory_kb)) if actual_tag_memory_kb > 0 else 0,
+                'total_memory_accuracy': (estimated_total_kb / max(1, search_memory_kb)) if search_memory_kb > 0 else 0,
                 'vector_memory_kb': vector_memory_kb,
                 'insertion_time': insertion_time,
                 'tags_config': str(scenario.tags_config.sharing.mode.value),
+                # Memory breakdown components
+                'valkey_core_kb': memory_breakdown['valkey_core_kb'],
+                'key_interning_kb': memory_breakdown['key_interning_kb'],
+                'search_module_overhead_kb': memory_breakdown['search_module_overhead_kb'],
+                'fragmentation_overhead_kb': memory_breakdown['fragmentation_overhead_kb'],
                 # Distribution statistics
                 'unique_tags': dist_stats['tag_usage']['unique_tags'],
                 'tag_length_min': dist_stats['tag_lengths']['min'],
@@ -1345,12 +1565,47 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             }
             
             monitor.log("🎯 FINAL RESULTS")
-            monitor.log("─" * 50)
-            monitor.log(f"📁 Data Memory:      {data_memory_kb:,} KB")
-            monitor.log(f"🏷️  Tag Index:       {tag_index_memory_kb:,} KB")  
-            monitor.log(f"🎯 Vector Index:     {vector_memory_kb:,} KB")
-            monitor.log(f"📈 Index Overhead:   {index_overhead_kb:,} KB")
-            monitor.log(f"💰 Total Memory:     {total_memory_kb:,} KB")
+            monitor.log("─" * 60)
+            monitor.log(f"📁 Data Memory:          {data_memory_kb:,} KB")
+            monitor.log(f"🔍 Search Module Total:  {search_memory_kb:,} KB (actual)")
+            monitor.log(f"🧮 Search Module Est.:   {estimated_total_kb:,} KB ({(estimated_total_kb/max(1,search_memory_kb)*100):.1f}% accuracy)")
+            monitor.log("")
+            monitor.log("📊 COMPREHENSIVE MEMORY BREAKDOWN:")
+            monitor.log(f"   🗄️  Valkey Core:       {memory_breakdown['valkey_core_kb']:,} KB")
+            monitor.log(f"   🔗 Key Interning:     {memory_breakdown['key_interning_kb']:,} KB") 
+            monitor.log(f"   🏷️  Tag Index:         {estimated_tag_memory_kb:,} KB (est) vs {actual_tag_memory_kb:,} KB (actual)")
+            monitor.log(f"   🎯 Vector Index:      {estimated_vector_memory_kb:,} KB (est) vs {vector_memory_kb:,} KB (calc)")
+            monitor.log(f"      • Vector data:     {memory_breakdown['vector_data_kb']:,} KB")
+            monitor.log(f"      • HNSW L0 graph:   {memory_breakdown['hnsw_level0_kb']:,} KB ({memory_breakdown['connections_per_node_l0']} conn/node)")
+            monitor.log(f"      • HNSW higher:     {memory_breakdown['hnsw_higher_levels_kb']:,} KB")
+            monitor.log(f"      • Mappings:        {memory_breakdown['vector_mappings_kb']:,} KB")
+            monitor.log(f"   ⚙️  Module Overhead:   {memory_breakdown['search_module_overhead_kb']:,} KB")
+            monitor.log(f"   🔀 Fragmentation:     {memory_breakdown['fragmentation_overhead_kb']:,} KB")
+            monitor.log("─" * 60)
+            monitor.log(f"📈 Index Overhead:       {index_overhead_kb:,} KB")
+            monitor.log(f"💰 Total Memory:         {total_memory_kb:,} KB")
+            monitor.log("")
+            
+            # Accuracy analysis
+            total_accuracy = estimated_total_kb / max(1, search_memory_kb)
+            tag_accuracy = estimated_tag_memory_kb / max(1, actual_tag_memory_kb) if actual_tag_memory_kb > 0 else 0
+            
+            monitor.log("🎯 ESTIMATION ACCURACY:")
+            if total_accuracy > 0:
+                if total_accuracy < 0.7:
+                    monitor.log(f"   ⚠️  Total: {total_accuracy:.2f}x (underestimating) - missing components?")
+                elif total_accuracy > 1.5:
+                    monitor.log(f"   ⚠️  Total: {total_accuracy:.2f}x (overestimating) - double counting?")
+                else:
+                    monitor.log(f"   ✅ Total: {total_accuracy:.2f}x (good overall accuracy)")
+            
+            if tag_accuracy > 0:
+                if tag_accuracy < 0.5:
+                    monitor.log(f"   ⚠️  Tag: {tag_accuracy:.2f}x (underestimating) - complex sharing patterns?")
+                elif tag_accuracy > 2.0:
+                    monitor.log(f"   ⚠️  Tag: {tag_accuracy:.2f}x (overestimating) - better sharing than expected?")
+                else:
+                    monitor.log(f"   ✅ Tag: {tag_accuracy:.2f}x (good tag index accuracy)")
             monitor.log("")
             
             # Save detailed distribution data
