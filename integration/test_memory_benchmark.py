@@ -695,18 +695,19 @@ class ProgressMonitor:
                     
                     # Get key count from db info
                     db_info = client.execute_command("info","keyspace")
-                    current_keys = 0
-                    if 'db0' in db_info and isinstance(db_info['db0'], dict) and 'keys' in db_info['db0']:
+                    if 'db0' not in db_info:
+                        current_keys = 0
+                    elif 'db0' in db_info and isinstance(db_info['db0'], dict) and 'keys' in db_info['db0']:
                         current_keys = db_info['db0']['keys']
+
+                    elif 'db0' in db_info and isinstance(db_info['db0'], str) and 'keys=' in db_info['db0']:
+                        # Parse "keys=123,expires=0,avg_ttl=0" format
+                        try:
+                            current_keys = int(db_info['db0'].split('keys=')[1].split(',')[0])
+                        except:
+                            assert False, "Expected 'db0' in keyspace info"
                     else:
                         assert False, "Expected 'db0' in keyspace info"
-                    # elif 'db0' in db_info and isinstance(db_info['db0'], str) and 'keys=' in db_info['db0']:
-                    #     # Parse "keys=123,expires=0,avg_ttl=0" format
-                    #     try:
-                    #         current_keys = int(db_info['db0'].split('keys=')[1].split(',')[0])
-                    #     except:
-                    #         current_keys = 0
-                    
                     # Try to get index information if available (during indexing phase)
                     index_info = {}
                     current_index_names = set()
@@ -1442,6 +1443,162 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             'total_data_size': total_data_size
         }
     
+    def export_dataset_to_csv(self, client: Valkey, prefix: str = "key:", scenario_name: str = "", timestamp: str = "", monitor: ProgressMonitor = None) -> tuple[str, str]:
+        """
+        Export dataset to CSV files for analysis.
+        
+        Returns tuple of (hashes_csv_filename, tags_csv_filename)
+        """
+        if monitor:
+            monitor.log("📁 Exporting dataset to CSV files...")
+        
+        if not timestamp:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        # Generate filenames
+        hashes_csv = f"dataset_hashes_{scenario_name}_{timestamp}.csv"
+        tags_csv = f"dataset_tags_{scenario_name}_{timestamp}.csv"
+        
+        # Data structures for analysis
+        hash_data = []  # List of (key, vector_len, tags_len, tag_ids)
+        tag_to_keys = {}  # tag -> set of keys
+        tag_id_counter = 0
+        tag_to_id = {}  # tag -> unique_id
+        
+        if monitor:
+            monitor.log(f"   Scanning keys with prefix: {prefix}")
+        
+        # Use SCAN to iterate through all keys
+        cursor = 0
+        processed_keys = 0
+        
+        while True:
+            cursor, keys = client.scan(cursor, match=f"{prefix}*", count=1000)
+            
+            if keys:
+                # Use pipeline for efficient batch reading
+                pipe = client.pipeline(transaction=False)
+                
+                # Queue all HGETALL commands
+                for key in keys:
+                    pipe.hgetall(key)
+                
+                # Execute and process results
+                results = pipe.execute()
+                
+                for i, (key, fields) in enumerate(zip(keys, results)):
+                    if fields:  # Make sure we got data
+                        processed_keys += 1
+                        
+                        # Handle key name (bytes vs string)
+                        if isinstance(key, bytes):
+                            key_str = key.decode('utf-8', errors='replace')
+                        else:
+                            key_str = str(key)
+                        
+                        # Handle field keys (bytes vs string)
+                        tags_key = b'tags' if isinstance(list(fields.keys())[0], bytes) else 'tags'
+                        vector_key = b'vector' if isinstance(list(fields.keys())[0], bytes) else 'vector'
+                        
+                        # Get vector length
+                        vector_len = 0
+                        if vector_key in fields:
+                            vector_value = fields[vector_key]
+                            if isinstance(vector_value, bytes):
+                                vector_len = len(vector_value)
+                            else:
+                                vector_len = len(str(vector_value))
+                        
+                        # Process tags
+                        tags_len = 0
+                        tag_ids = []
+                        if tags_key in fields:
+                            tag_value = fields[tags_key]
+                            if isinstance(tag_value, bytes):
+                                tag_value = tag_value.decode('utf-8', errors='replace')
+                            else:
+                                tag_value = str(tag_value)
+                            
+                            tags_len = len(tag_value)
+                            
+                            # Split tags and assign IDs
+                            if tag_value.strip():
+                                tags = [tag.strip() for tag in tag_value.split(',') if tag.strip()]
+                                for tag in tags:
+                                    # Assign unique ID to each tag
+                                    if tag not in tag_to_id:
+                                        tag_to_id[tag] = tag_id_counter
+                                        tag_id_counter += 1
+                                        tag_to_keys[tag] = set()
+                                    
+                                    tag_ids.append(tag_to_id[tag])
+                                    tag_to_keys[tag].add(key_str)
+                        
+                        # Store hash data
+                        hash_data.append({
+                            'key': key_str,
+                            'vector_len': vector_len,
+                            'tags_len': tags_len,
+                            'tag_ids': ','.join(map(str, sorted(tag_ids))) if tag_ids else ''
+                        })
+                
+                # Update progress
+                if monitor and processed_keys % 10000 == 0:
+                    monitor.log(f"   Processed {processed_keys:,} keys...")
+            
+            # Check if we're done
+            if cursor == 0:
+                break
+        
+        if monitor:
+            monitor.log(f"✅ Processed {processed_keys:,} keys, found {len(tag_to_id)} unique tags")
+        
+        # Write hashes CSV
+        try:
+            import csv
+            with open(hashes_csv, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=['key', 'vector_len', 'tags_len', 'tag_ids'])
+                writer.writeheader()
+                writer.writerows(hash_data)
+            
+            if monitor:
+                monitor.log(f"📄 Hashes CSV written: {hashes_csv} ({len(hash_data):,} rows)")
+        
+        except Exception as e:
+            if monitor:
+                monitor.log(f"❌ Failed to write hashes CSV: {e}")
+            raise
+        
+        # Write tags CSV
+        try:
+            tag_data = []
+            for tag, tag_id in tag_to_id.items():
+                keys_for_tag = tag_to_keys[tag]
+                tag_data.append({
+                    'id': tag_id,
+                    'tag': tag,
+                    'len': len(tag),
+                    'keys': ','.join(sorted(keys_for_tag))
+                })
+            
+            # Sort by ID for consistent output
+            tag_data.sort(key=lambda x: x['id'])
+            
+            with open(tags_csv, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=['id', 'tag', 'len', 'keys'])
+                writer.writeheader()
+                writer.writerows(tag_data)
+            
+            if monitor:
+                monitor.log(f"📄 Tags CSV written: {tags_csv} ({len(tag_data):,} rows)")
+        
+        except Exception as e:
+            if monitor:
+                monitor.log(f"❌ Failed to write tags CSV: {e}")
+            raise
+        
+        return hashes_csv, tags_csv
+    
     def create_schema(self, index_name: str, vector_dim: int = 8) -> IndexSchema:
         """Create a minimal schema with tags and small vector"""
         return IndexSchema(
@@ -1641,7 +1798,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 num_keys=scenario.total_keys,
                 schema=schema,
                 tags_config=scenario.tags_config,
-                key_length=LengthConfig(avg=64, min=64, max=64),  # Fixed length keys
+                key_length=LengthConfig(avg=8, min=8, max=8),  # Fixed length keys
                 batch_size=100,  # Optimize batch size
                 seed=42
             )
@@ -1790,6 +1947,40 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 monitor.log(f"⏱️  Verification time: {verification_time:.1f}s")
                 monitor.log("")
             
+            # Export dataset to CSV files for analysis
+            hashes_csv = ""
+            tags_csv = ""
+            if scenario.total_keys <= 100000:  # Only export for smaller datasets to avoid huge files
+                monitor.log("📁 DATASET EXPORT")
+                monitor.log("─" * 50)
+                export_start = time.time()
+                
+                # Get timestamp from current scenario
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                
+                # Create a client without decode_responses for proper binary handling
+                export_client = SilentValkeyClient(
+                    host=client.connection_pool.connection_kwargs['host'],
+                    port=client.connection_pool.connection_kwargs['port'],
+                    decode_responses=False  # Important for binary data
+                )
+                
+                try:
+                    hashes_csv, tags_csv = self.export_dataset_to_csv(
+                        export_client, 
+                        prefix="key:",  # Assuming standard prefix
+                        scenario_name=scenario.name,
+                        timestamp=timestamp,
+                        monitor=monitor
+                    )
+                    export_time = time.time() - export_start
+                    monitor.log(f"⏱️  Export time: {export_time:.1f}s")
+                finally:
+                    assert export_client is not None
+                    export_client.close()
+
+                monitor.log("")
+            
             # Measure memory after data insertion
             data_memory = client.info("memory")['used_memory']
             data_memory_kb = (data_memory - baseline_memory) // 1024
@@ -1879,7 +2070,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 'keys_per_tag_min': dist_stats['tag_usage']['min_keys_per_tag'],
                 'keys_per_tag_max': dist_stats['tag_usage']['max_keys_per_tag'],
                 'keys_per_tag_mean': dist_stats['tag_usage']['mean_keys_per_tag'],
-                'keys_per_tag_p95': dist_stats['tag_usage']['p95_keys_per_tag']
+                'keys_per_tag_p95': dist_stats['tag_usage']['p95_keys_per_tag'],
+                'hashes_csv': hashes_csv,
+                'tags_csv': tags_csv
             }
             
             monitor.log("🎯 FINAL RESULTS")
@@ -1983,7 +2176,20 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             description="Unique tags per key (no sharing)"
         ))
         
-        # 2. Perfect overlap (all keys share same tags)
+        # 2. Single unique tag per key
+        scenarios.append(BenchmarkScenario(
+            name="Single_Unique_Tag",
+            total_keys=base_keys,
+            tags_config=TagsConfig(
+                num_keys=base_keys,
+                tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
+                tag_length=LengthConfig(avg=200, min=10, max=300),
+                sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+            ),
+            description="1 unique tag per key"
+        ))
+        
+        # 3. Perfect overlap (all keys share same tags)
         scenarios.append(BenchmarkScenario(
             name="Perfect_Overlap",
             total_keys=base_keys,
@@ -1996,7 +2202,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             description="All keys share same 5 tags"
         ))
         
-        # 3. Shared pool with varying pool sizes
+        # 4. Shared pool with varying pool sizes
         for pool_size in [100, 100000]:
             scenarios.append(BenchmarkScenario(
                 name=f"SharedPool_{pool_size}",
@@ -2014,7 +2220,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 description=f"Shared pool of {pool_size} tags"
             ))
         
-        # 4. Group-based sharing (realistic scenarios)
+        # 5. Group-based sharing (realistic scenarios)
         for group_size in [100, 100000]:
             scenarios.append(BenchmarkScenario(
                 name=f"GroupBased_{group_size}",
@@ -2032,7 +2238,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 description=f"Groups of {group_size} keys sharing 20 tags"
             ))
         
-        # 5. Prefix sharing variations
+        # 6. Prefix sharing variations
         for prefix_ratio in [0.3, 0.8]:
             scenarios.append(BenchmarkScenario(
                 name=f"PrefixShare_{int(prefix_ratio*100)}pct",
@@ -2053,7 +2259,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 description=f"{int(prefix_ratio*100)}% prefix sharing"
             ))
         
-        # 6. Tag count variations
+        # 7. Tag count variations
         for avg_tags in [10, 50]:
             scenarios.append(BenchmarkScenario(
                 name=f"TagCount_{avg_tags}",
@@ -2067,7 +2273,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 description=f"Average {avg_tags} tags per key"
             ))
         
-        # 7. Tag length variations
+        # 8. Tag length variations
         for tag_len in [64, 200]:
             scenarios.append(BenchmarkScenario(
                 name=f"TagLength_{tag_len}",
@@ -2081,7 +2287,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 description=f"Average tag length {tag_len} bytes"
             ))
         
-        # 8. Distribution variations
+        # 9. Distribution variations
         for dist in [Distribution.UNIFORM, Distribution.NORMAL, Distribution.ZIPF]:
             scenarios.append(BenchmarkScenario(
                 name=f"Distribution_{dist.value}",
@@ -2241,6 +2447,17 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         scenarios = [
             BenchmarkScenario(
+                name="Quick_SingleUnique",
+                total_keys=10000,
+                tags_config=TagsConfig(
+                    num_keys=10000,
+                    tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
+                    tag_length=LengthConfig(avg=20, min=10, max=30),
+                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+                ),
+                description="1 unique tag per key"
+            ),
+            BenchmarkScenario(
                 name="Quick_Unique",
                 total_keys=10000,
                 tags_config=TagsConfig(
@@ -2249,7 +2466,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                     tag_length=LengthConfig(avg=20, min=10, max=30),
                     sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
                 ),
-                description="Unique tags baseline"
+                description="Unique tags baseline (5 tags/key)"
             ),
             BenchmarkScenario(
                 name="Quick_SharedPool",
@@ -2441,6 +2658,90 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         finally:
             monitor.stop()
             client.flushdb()
+    
+    def test_csv_export_functionality(self):
+        """Test the CSV export functionality with a small dataset"""
+        client = self.server.get_new_client()
+        monitor = ProgressMonitor(self.server, "csv_export_test")
+        
+        monitor.start()
+        
+        try:
+            monitor.log("=== TESTING CSV EXPORT FUNCTIONALITY ===")
+            
+            # Clear any existing data
+            client.flushdb()
+            
+            # Create test data with known structure
+            test_data = [
+                ("key:test1", {"tags": "tag_a,tag_b,tag_c", "vector": b"\x00\x01\x02\x03\x04\x05\x06\x07"}),
+                ("key:test2", {"tags": "tag_b,tag_c,tag_d", "vector": b"\x10\x11\x12\x13\x14\x15\x16\x17"}),
+                ("key:test3", {"tags": "tag_a,tag_d", "vector": b"\x20\x21\x22\x23\x24\x25\x26\x27"}),
+                ("key:test4", {"tags": "tag_e,tag_f", "vector": b"\x30\x31\x32\x33\x34\x35\x36\x37"}),
+            ]
+            
+            # Insert test data
+            monitor.log("Inserting test data...")
+            for key, fields in test_data:
+                client.hset(key, mapping=fields)
+            
+            # Test CSV export
+            monitor.log("Testing CSV export...")
+            
+            # Create a client without decode_responses for proper binary handling
+            export_client = SilentValkeyClient(
+                host=client.connection_pool.connection_kwargs['host'],
+                port=client.connection_pool.connection_kwargs['port'],
+                decode_responses=False
+            )
+            
+            try:
+                hashes_csv, tags_csv = self.export_dataset_to_csv(
+                    export_client,
+                    prefix="key:",
+                    scenario_name="test_export",
+                    timestamp="test_123",
+                    monitor=monitor
+                )
+                
+                # Verify files were created
+                import os
+                assert os.path.exists(hashes_csv), f"Hashes CSV not created: {hashes_csv}"
+                assert os.path.exists(tags_csv), f"Tags CSV not created: {tags_csv}"
+                
+                # Check hashes CSV content
+                import csv
+                with open(hashes_csv, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    hash_rows = list(reader)
+                    
+                assert len(hash_rows) == 4, f"Expected 4 hash rows, got {len(hash_rows)}"
+                
+                # Check tags CSV content  
+                with open(tags_csv, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    tag_rows = list(reader)
+                    
+                # Should have unique tags: tag_a, tag_b, tag_c, tag_d, tag_e, tag_f
+                assert len(tag_rows) == 6, f"Expected 6 unique tags, got {len(tag_rows)}"
+                
+                monitor.log("✅ CSV export test passed!")
+                
+                # Log some sample data
+                monitor.log(f"Sample hash row: {hash_rows[0]}")
+                monitor.log(f"Sample tag row: {tag_rows[0]}")
+                
+                # Cleanup test files
+                os.remove(hashes_csv)
+                os.remove(tags_csv)
+                monitor.log("🧹 Test files cleaned up")
+                
+            finally:
+                export_client.close()
+            
+        finally:
+            client.flushdb()
+            monitor.stop()
     
     def test_verify_memory_function(self):
         """Test the verify_memory function with a small dataset"""
