@@ -222,7 +222,7 @@ class AsyncSilentClientPool:
             try:
                 await client.aclose()
             except:
-                pass
+                continue
 
 
 class SilentClientPool:
@@ -279,17 +279,16 @@ class SilentClientPool:
         self.thread_local.client = self.clients[client_index]
         return self.thread_local.client
     
-    def return_client(self, client: SilentValkeyClient):
-        """Return a client to the pool - no-op for thread-indexed clients"""
-        pass
     
     def close_all(self):
         """Close all clients in the pool"""
         for client in self.clients:
-            try:
-                client.close()
-            except:
-                pass
+            while True:
+                try:
+                    client.close()
+                    break
+                except:
+                    continue
 
 
 @dataclass
@@ -594,12 +593,14 @@ class ProgressMonitor:
                     current_keys = 0
                     if 'db0' in db_info and isinstance(db_info['db0'], dict) and 'keys' in db_info['db0']:
                         current_keys = db_info['db0']['keys']
-                    elif 'db0' in db_info and isinstance(db_info['db0'], str) and 'keys=' in db_info['db0']:
-                        # Parse "keys=123,expires=0,avg_ttl=0" format
-                        try:
-                            current_keys = int(db_info['db0'].split('keys=')[1].split(',')[0])
-                        except:
-                            current_keys = 0
+                    else:
+                        assert False, "Expected 'db0' in keyspace info"
+                    # elif 'db0' in db_info and isinstance(db_info['db0'], str) and 'keys=' in db_info['db0']:
+                    #     # Parse "keys=123,expires=0,avg_ttl=0" format
+                    #     try:
+                    #         current_keys = int(db_info['db0'].split('keys=')[1].split(',')[0])
+                    #     except:
+                    #         current_keys = 0
                     
                     # Try to get index information if available (during indexing phase)
                     index_info = {}
@@ -1106,8 +1107,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                             return int(line.split()[1]) * 1024
             except:
                 # Conservative fallback: assume 2GB available
-                logging.warning("Could not determine available memory, using conservative 2GB estimate")
-                return 2 * 1024 * 1024 * 1024
+                assert False, "Could not determine available memory, using conservative 2GB estimate"
     
     def estimate_memory_usage(self, scenario: BenchmarkScenario) -> Dict[str, int]:
         """Estimate memory usage for a scenario in bytes"""
@@ -1188,6 +1188,120 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             )
         
         return True, f"Memory check passed: ~{estimates['total_memory'] / (1024**3):.1f}GB required, {available_memory / (1024**3):.1f}GB available"
+    
+    def verify_memory(self, client: Valkey, prefix: str = "key:", monitor: ProgressMonitor = None) -> Dict[str, int]:
+        """
+        Read all generated keys and calculate the total length of data.
+        
+        Returns a dictionary with:
+        - total_keys: number of keys found
+        - sum_key_lengths: sum of all key name lengths
+        - sum_tag_lengths: sum of all tag field data lengths
+        - sum_vector_lengths: sum of all vector field data lengths (in bytes)
+        - total_data_size: total size of all data
+        """
+        if monitor:
+            monitor.log("🔍 Starting memory verification...")
+            monitor.log(f"   Scanning keys with prefix: {prefix}")
+        
+        # Initialize counters
+        total_keys = 0
+        sum_key_lengths = 0
+        sum_tag_lengths = 0
+        sum_vector_lengths = 0
+        
+        # Use SCAN to iterate through all keys with the prefix
+        cursor = 0
+        batch_count = 0
+        
+        while True:
+            cursor, keys = client.scan(cursor, match=f"{prefix}*", count=1000)
+            
+            if keys:
+                batch_count += 1
+                # Use pipeline for efficient batch reading
+                pipe = client.pipeline(transaction=False)
+                
+                # Queue all HGETALL commands
+                for key in keys:
+                    pipe.hgetall(key)
+                
+                # Execute and process results
+                results = pipe.execute()
+                
+                for i, (key, fields) in enumerate(zip(keys, results)):
+                    if fields:  # Make sure we got data
+                        total_keys += 1
+                        
+                        # Add key name length (handle bytes)
+                        if isinstance(key, bytes):
+                            sum_key_lengths += len(key)
+                        else:
+                            sum_key_lengths += len(str(key))
+                        
+                        # Debug first few keys
+                        if total_keys <= 3 and monitor:
+                            field_keys = [k.decode('utf-8') if isinstance(k, bytes) else k for k in fields.keys()]
+                            monitor.log(f"   Debug key {key}: fields={field_keys}")
+                        
+                        # Process fields - handle both string and bytes keys
+                        tags_key = b'tags' if isinstance(list(fields.keys())[0], bytes) else 'tags'
+                        vector_key = b'vector' if isinstance(list(fields.keys())[0], bytes) else 'vector'
+                        
+                        if tags_key in fields:
+                            # Tags are stored as string
+                            tag_value = fields[tags_key]
+                            if isinstance(tag_value, bytes):
+                                sum_tag_lengths += len(tag_value)
+                            else:
+                                sum_tag_lengths += len(str(tag_value))
+                        
+                        if vector_key in fields:
+                            # Vector is stored as binary data
+                            vector_value = fields[vector_key]
+                            if isinstance(vector_value, bytes):
+                                sum_vector_lengths += len(vector_value)
+                            else:
+                                sum_vector_lengths += len(str(vector_value))
+                
+                # Update progress periodically
+                if monitor and batch_count % 10 == 0:
+                    monitor.log(f"   Processed {total_keys:,} keys so far...")
+            
+            # Check if we're done
+            if cursor == 0:
+                break
+        
+        # Calculate totals
+        total_data_size = sum_key_lengths + sum_tag_lengths + sum_vector_lengths
+        
+        # Log results
+        if monitor:
+            monitor.log("✅ Memory verification complete!")
+            monitor.log("─" * 50)
+            monitor.log(f"📊 Total keys found: {total_keys:,}")
+            monitor.log(f"🔑 Sum of key lengths: {sum_key_lengths:,} bytes ({sum_key_lengths / (1024**2):.2f} MB)")
+            monitor.log(f"🏷️  Sum of tag lengths: {sum_tag_lengths:,} bytes ({sum_tag_lengths / (1024**2):.2f} MB)")
+            monitor.log(f"📐 Sum of vector lengths: {sum_vector_lengths:,} bytes ({sum_vector_lengths / (1024**2):.2f} MB)")
+            monitor.log(f"💾 Total data size: {total_data_size:,} bytes ({total_data_size / (1024**2):.2f} MB)")
+            monitor.log("")
+            
+            # Calculate averages
+            if total_keys > 0:
+                monitor.log("📈 Average sizes per key:")
+                monitor.log(f"   Key name: {sum_key_lengths / total_keys:.1f} bytes")
+                monitor.log(f"   Tags field: {sum_tag_lengths / total_keys:.1f} bytes")
+                monitor.log(f"   Vector field: {sum_vector_lengths / total_keys:.1f} bytes")
+                monitor.log(f"   Total per key: {total_data_size / total_keys:.1f} bytes")
+            monitor.log("")
+        
+        return {
+            'total_keys': total_keys,
+            'sum_key_lengths': sum_key_lengths,
+            'sum_tag_lengths': sum_tag_lengths,
+            'sum_vector_lengths': sum_vector_lengths,
+            'total_data_size': total_data_size
+        }
     
     def create_schema(self, index_name: str, vector_dim: int = 8) -> IndexSchema:
         """Create a minimal schema with tags and small vector"""
@@ -1345,6 +1459,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         # Get main client
         client = self.get_silent_client()
+        client_pool = None  # Initialize to None to avoid undefined variable error
         
         try:
             # Verify server connection
@@ -1526,6 +1641,16 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                        f"max={dist_summary['tag_usage']['max_keys_per_tag']}")
             monitor.log("")
             
+            # Verify memory by reading all keys
+            if scenario.total_keys <= 1000000:  # Only verify for datasets up to 1M keys to avoid timeout
+                monitor.log("🔍 MEMORY VERIFICATION")
+                monitor.log("─" * 50)
+                verification_start = time.time()
+                memory_verification = self.verify_memory(client, monitor=monitor)
+                verification_time = time.time() - verification_start
+                monitor.log(f"⏱️  Verification time: {verification_time:.1f}s")
+                monitor.log("")
+            
             # Measure memory after data insertion
             data_memory = client.info("memory")['used_memory']
             data_memory_kb = (data_memory - baseline_memory) // 1024
@@ -1549,11 +1674,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             index_overhead_kb = (final_memory - data_memory) // 1024
             
             # Get search module info
-            try:
-                search_info = client.execute_command("info","modules")
-                search_memory_kb = search_info.get('search_used_memory_bytes', 0) // 1024
-            except:
-                search_memory_kb = index_overhead_kb
+            search_info = client.execute_command("info","modules")
+            search_memory_kb = search_info.get('search_used_memory_bytes', 0) // 1024
+
             
             # Get distribution statistics first
             dist_stats = dist_collector.get_summary()
@@ -1677,18 +1800,27 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log(f"  Distribution details saved to {dist_filename}")
             
             # Cleanup
-            try:
-                client.execute_command("FT.DROPINDEX", index_name)
-            except:
-                pass
+            client.execute_command("FT.DROPINDEX", index_name)
             
             # Clear index monitoring and status
             monitor.clear_index_names()
             monitor.update_status({})  # Clear any lingering status updates
+        
+        except Exception as e:
+            # Handle any errors during the benchmark
+            monitor.error(f"  ❌ Scenario failed: {e}")
+            result = {
+                'scenario_name': scenario.name,
+                'description': scenario.description,
+                'total_keys': scenario.total_keys,
+                'skipped': True,
+                'reason': f"Failed: {str(e)}"
+            }
             
         finally:
             # Clean up resources
-            client_pool.close_all()
+            if client_pool is not None:
+                client_pool.close_all()
             # Only stop monitor if we created it
             if should_stop_monitor:
                 monitor.stop()
@@ -2124,6 +2256,80 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 monitor.log(f"🐌 ASYNC IS SLOWER by {abs(improvement):.1f}%")
         
         monitor.log(f"\nLog file: {log_file}")
+        monitor.stop()
+    
+    def test_verify_memory_function(self):
+        """Test the verify_memory function with a small dataset"""
+        # Use the regular client which has decode_responses=True
+        client = self.server.get_new_client()
+        monitor = ProgressMonitor(self.server, "verify_memory_test")
+        log_file = self.setup_file_logging("verify_memory_test")
+        
+        monitor.start()
+        
+        monitor.log("=== TESTING VERIFY MEMORY FUNCTION ===")
+        monitor.log("Creating a small test dataset to verify memory calculation")
+        monitor.log("")
+        
+        # Clear any existing data
+        client.flushdb()
+        
+        # Create test data with known sizes
+        test_keys = [
+            ("key:test1", {"tags": "tag1,tag2,tag3", "vector": b"\x00\x01\x02\x03\x04\x05\x06\x07"}),
+            ("key:test2", {"tags": "tag2,tag3,tag4,tag5", "vector": b"\x10\x11\x12\x13\x14\x15\x16\x17"}),
+            ("key:test3", {"tags": "tag1,tag4", "vector": b"\x20\x21\x22\x23\x24\x25\x26\x27"}),
+        ]
+        
+        # Insert test data
+        monitor.log("Inserting test data...")
+        for key, fields in test_keys:
+            client.hset(key, mapping=fields)
+        
+        # Debug: Check what's actually stored
+        monitor.log("Debug: Checking stored data...")
+        for key, _ in test_keys:
+            stored_data = client.hgetall(key)
+            monitor.log(f"  {key}: {stored_data}")
+        
+        # Run verification - need to create a new client without decode_responses for binary data
+        monitor.log("")
+        # Create a client specifically for verify_memory that doesn't decode responses
+        verify_client = SilentValkeyClient(
+            host=client.connection_pool.connection_kwargs['host'],
+            port=client.connection_pool.connection_kwargs['port'],
+            decode_responses=False  # Important: Don't decode for binary data
+        )
+        results = self.verify_memory(verify_client, monitor=monitor)
+        verify_client.close()
+        
+        # Validate results
+        monitor.log("📊 VALIDATION")
+        monitor.log("─" * 50)
+        
+        # Expected values
+        expected_keys = len(test_keys)
+        expected_key_lengths = sum(len(k) for k, _ in test_keys)
+        expected_tag_lengths = sum(len(f["tags"]) for _, f in test_keys)
+        expected_vector_lengths = sum(len(f["vector"]) for _, f in test_keys)
+        
+        monitor.log(f"Expected keys: {expected_keys}, Found: {results['total_keys']}")
+        monitor.log(f"Expected key lengths: {expected_key_lengths}, Found: {results['sum_key_lengths']}")
+        monitor.log(f"Expected tag lengths: {expected_tag_lengths}, Found: {results['sum_tag_lengths']}")
+        monitor.log(f"Expected vector lengths: {expected_vector_lengths}, Found: {results['sum_vector_lengths']}")
+        
+        # Assert correctness
+        assert results['total_keys'] == expected_keys, f"Key count mismatch"
+        assert results['sum_key_lengths'] == expected_key_lengths, f"Key length sum mismatch"
+        assert results['sum_tag_lengths'] == expected_tag_lengths, f"Tag length sum mismatch"
+        assert results['sum_vector_lengths'] == expected_vector_lengths, f"Vector length sum mismatch"
+        
+        monitor.log("")
+        monitor.log("✅ All validations passed!")
+        monitor.log(f"Log file: {log_file}")
+        
+        # Cleanup
+        client.flushdb()
         monitor.stop()
     
     def test_fuzzy_memory_estimation(self, use_async: bool = True):
