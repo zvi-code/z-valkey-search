@@ -1015,7 +1015,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         logging.info(f"Starting {test_name} - Log file: {log_filename}")
         return log_filename
     
-    def calculate_comprehensive_memory(self, total_keys, unique_tags, avg_tag_length, avg_tags_per_key, avg_keys_per_tag, vector_dims=8, hnsw_m=16):
+    def calculate_comprehensive_memory(self, total_keys, unique_tags, avg_tag_length, avg_tags_per_key, avg_keys_per_tag, vector_dims=8, hnsw_m=16, monitor=None):
         """
         Calculate comprehensive search module memory including all major components.
         
@@ -1031,10 +1031,23 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             avg_tags_per_key: Average tags per key
             avg_keys_per_tag: Average keys per tag (sharing factor)
             vector_dims: Vector dimensions (default 8)
+            monitor: Optional progress monitor for detailed logging
         
         Returns:
             Dictionary with detailed memory breakdown in KB
         """
+        
+        if monitor:
+            monitor.log("🔍 COMPREHENSIVE MEMORY BREAKDOWN CALCULATION")
+            monitor.log("─" * 60)
+            monitor.log("📊 Input Parameters:")
+            monitor.log(f"   • Total keys: {total_keys:,}")
+            monitor.log(f"   • Unique tags: {unique_tags:,}")
+            monitor.log(f"   • Avg tag length: {avg_tag_length:.1f} bytes")
+            monitor.log(f"   • Avg tags per key: {avg_tags_per_key:.1f}")
+            monitor.log(f"   • Avg keys per tag: {avg_keys_per_tag:.1f}")
+            monitor.log(f"   • Vector dimensions: {vector_dims}")
+            monitor.log("")
         
         # === 1. VALKEY CORE OVERHEAD ===
         # Valkey stores HASH keys with internal overhead
@@ -1054,6 +1067,13 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         )
         
         valkey_memory = valkey_key_overhead + valkey_fields_overhead
+        
+        if monitor:
+            monitor.log("🗄️  VALKEY CORE CALCULATION:")
+            monitor.log(f"   Key overhead: {total_keys:,} × (32 + {avg_key_length} + 8 + 16) = {valkey_key_overhead:,.0f} bytes")
+            monitor.log(f"   Field storage: {total_keys:,} × ({avg_tags_per_key:.1f} × {avg_tag_length:.1f} × 1.2 + {vector_dims} × 4 × 1.1 + 32) = {valkey_fields_overhead:,.0f} bytes")
+            monitor.log(f"   Valkey total: {valkey_memory:,.0f} bytes = {valkey_memory / 1024:.0f} KB")
+            monitor.log("")
         
         # === 2. TAG INDEX MEMORY ===
         # String Interning (with better estimates)  
@@ -1101,6 +1121,16 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             patricia_tree_memory + 
             untracked_keys_memory
         )
+        
+        if monitor:
+            monitor.log("🏷️  TAG INDEX CALCULATION:")
+            monitor.log(f"   Tag interning: {unique_tags:,} × ({avg_tag_length:.1f} + 32) + {unique_tags:,} × 48 = {tag_interning_memory:,.0f} bytes")
+            monitor.log(f"   Key interning: {total_keys:,} × ({avg_key_length} + 32) + {total_keys:,} × 48 = {key_interning_memory:,.0f} bytes")
+            monitor.log(f"   Tracked keys: {total_keys:,} × (8 + {taginfo_per_key:.0f} + 16) = {tracked_keys_memory:,.0f} bytes")
+            monitor.log(f"   Patricia tree: {estimated_tree_nodes:,} nodes × 72 + {unique_tags:,} tags × (32 + {avg_keys_per_tag:.1f} × 8) = {patricia_tree_memory:,.0f} bytes")
+            monitor.log(f"   Untracked keys: {total_keys:,} × 0.1 × 24 = {untracked_keys_memory:,.0f} bytes")
+            monitor.log(f"   Tag index total: {tag_index_memory:,.0f} bytes = {tag_index_memory / 1024:.0f} KB")
+            monitor.log("")
         
         # === 3. VECTOR INDEX MEMORY ===
         # The benchmark uses 8-dimensional vectors, but we need to determine if FLAT or HNSW is used
@@ -1205,6 +1235,22 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             'connections_per_node_l0': maxM0
         }
         
+        if monitor:
+            monitor.log("📊 FINAL COMPREHENSIVE BREAKDOWN:")
+            monitor.log(f"   • Valkey Core:           {breakdown['valkey_core_kb']:,} KB")
+            monitor.log(f"   • Key Interning:         {breakdown['key_interning_kb']:,} KB")
+            monitor.log(f"   • Tag Index:             {breakdown['tag_index_kb']:,} KB")
+            monitor.log(f"   • Vector Index:          {breakdown['vector_index_kb']:,} KB")
+            monitor.log(f"     - Vector Data:         {breakdown['vector_data_kb']:,} KB")
+            monitor.log(f"     - HNSW Level 0:        {breakdown['hnsw_level0_kb']:,} KB")
+            monitor.log(f"     - HNSW Higher:         {breakdown['hnsw_higher_levels_kb']:,} KB")
+            monitor.log(f"     - Mappings:            {breakdown['vector_mappings_kb']:,} KB")
+            monitor.log(f"   • Module Overhead:       {breakdown['search_module_overhead_kb']:,} KB")
+            monitor.log(f"   • Fragmentation:         {breakdown['fragmentation_overhead_kb']:,} KB")
+            monitor.log(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            monitor.log(f"   🎯 TOTAL ESTIMATED:      {breakdown['total_estimated_kb']:,} KB")
+            monitor.log("")
+        
         return breakdown
     
     def append_to_csv(self, csv_filename: str, result: Dict, monitor: ProgressMonitor = None, write_header: bool = False):
@@ -1249,67 +1295,112 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 # Conservative fallback: assume 2GB available
                 assert False, "Could not determine available memory, using conservative 2GB estimate"
     
-    def estimate_memory_usage(self, scenario: BenchmarkScenario) -> Dict[str, int]:
-        """Estimate memory usage for a scenario in bytes"""
-        # Base estimates
-        key_overhead = 64  # Redis key overhead
-        hash_overhead = 64  # Hash structure overhead
-        field_overhead = 24  # Per field overhead
+    def estimate_memory_usage(self, scenario: BenchmarkScenario, monitor=None) -> Dict[str, int]:
+        """Estimate memory usage using enhanced non-linear model with detailed logging"""
+        # Get scenario statistics
+        stats = self._calculate_estimated_stats(scenario)
         
-        # Tag field estimate
-        avg_tags_per_key = scenario.tags_config.tags_per_key.avg
-        avg_tag_length = scenario.tags_config.tag_length.avg
-        tag_field_size = avg_tags_per_key * (avg_tag_length + 10)  # +10 for separators/overhead
+        # Enhanced model coefficients (from analysis)
+        coef = {
+            'constant': -4091.88,
+            'per_key': 0.987045,
+            'per_unique_tag': 0.117864,
+            'per_tag_length': 4.973969,
+            'tag_content': 0.002756,  # tags × length
+            'sharing_efficiency': -1213.788388,  # log(keys_per_tag)
+            'prefix_compression': 0.117864,  # for prefix sharing
+            'content_per_key': 0.052673  # keys × tag_len / tags
+        }
         
-        # Vector field estimate (8 dimensions * 4 bytes per float)
-        vector_field_size = 8 * 4
+        # Extract parameters
+        num_keys = scenario.total_keys
+        unique_tags = stats['unique_tags']
+        avg_tag_len = stats['avg_tag_length']
+        keys_per_tag = stats['avg_keys_per_tag']
         
-        # Per-key memory estimate
-        per_key_memory = (
-            key_overhead + 
-            hash_overhead + 
-            2 * field_overhead +  # tags and vector fields
-            tag_field_size + 
-            vector_field_size
-        )
+        # Calculate sharing effects
+        import math
+        tag_sharing_factor = math.log(max(keys_per_tag, 1.1))  # log sharing effect
         
-        # Total data memory
-        data_memory = scenario.total_keys * per_key_memory
+        # Detect prefix sharing (simplified detection)
+        prefix_sharing_factor = 1.0  # Default no prefix sharing
+        if hasattr(scenario.tags_config, 'tag_prefix') and scenario.tags_config.tag_prefix:
+            if scenario.tags_config.tag_prefix.enabled:
+                # Estimate compression based on prefix config
+                prefix_ratio = scenario.tags_config.tag_prefix.min_shared / max(avg_tag_len, 1)
+                prefix_sharing_factor = prefix_ratio
         
-        # Index memory estimate (conservative)
-        # Tag index overhead depends on sharing pattern
-        if scenario.tags_config.sharing.mode == TagSharingMode.UNIQUE:
-            # Worst case: each tag is unique
-            unique_tags = scenario.total_keys * avg_tags_per_key
-            tag_index_memory = unique_tags * 100  # ~100 bytes per unique tag entry
-        elif scenario.tags_config.sharing.mode == TagSharingMode.PERFECT_OVERLAP:
-            # Best case: all keys share same tags
-            unique_tags = avg_tags_per_key
-            tag_index_memory = unique_tags * 100 + scenario.total_keys * 20
-        else:
-            # Estimate based on pool size or group configuration
-            if scenario.tags_config.sharing.pool_size:
-                unique_tags = scenario.tags_config.sharing.pool_size
-            else:
-                # Group-based or other patterns
-                unique_tags = scenario.total_keys * avg_tags_per_key * 0.3  # 30% unique tags estimate
-            tag_index_memory = unique_tags * 100 + scenario.total_keys * 20
+        # Log the detailed formula and inputs
+        if monitor:
+            monitor.log("🧮 ENHANCED MEMORY ESTIMATION MODEL")
+            monitor.log("─" * 50)
+            monitor.log("📊 Input Parameters:")
+            monitor.log(f"   • Keys: {num_keys:,}")
+            monitor.log(f"   • Unique tags: {unique_tags:,}")
+            monitor.log(f"   • Avg tag length: {avg_tag_len:.1f} bytes")
+            monitor.log(f"   • Keys per tag: {keys_per_tag:.1f}")
+            monitor.log(f"   • Tag sharing factor: log({keys_per_tag:.1f}) = {tag_sharing_factor:.3f}")
+            monitor.log(f"   • Prefix sharing factor: {prefix_sharing_factor:.3f}")
+            monitor.log("")
+            monitor.log("🔢 Formula Components:")
+            monitor.log(f"   Constant:               {coef['constant']:>8.2f} KB")
+            monitor.log(f"   Keys term:              {coef['per_key']:.6f} × {num_keys:,} = {coef['per_key'] * num_keys:>8.1f} KB")
+            monitor.log(f"   Unique tags term:       {coef['per_unique_tag']:.6f} × {unique_tags:,} = {coef['per_unique_tag'] * unique_tags:>8.1f} KB")
+            monitor.log(f"   Tag length term:        {coef['per_tag_length']:.6f} × {avg_tag_len:.1f} = {coef['per_tag_length'] * avg_tag_len:>8.1f} KB")
+            monitor.log(f"   Tag content term:       {coef['tag_content']:.6f} × ({unique_tags:,} × {avg_tag_len:.1f}) = {coef['tag_content'] * (unique_tags * avg_tag_len):>8.1f} KB")
+            monitor.log(f"   Sharing efficiency:     {coef['sharing_efficiency']:.6f} × {tag_sharing_factor:.3f} = {coef['sharing_efficiency'] * tag_sharing_factor:>8.1f} KB")
+            monitor.log(f"   Prefix compression:     {coef['prefix_compression']:.6f} × ({prefix_sharing_factor:.3f} × {unique_tags:,}) = {coef['prefix_compression'] * (prefix_sharing_factor * unique_tags):>8.1f} KB")
+            monitor.log(f"   Content per key:        {coef['content_per_key']:.6f} × ({num_keys:,} × {avg_tag_len:.1f} / {unique_tags:,}) = {coef['content_per_key'] * (num_keys * avg_tag_len / max(unique_tags, 1)):>8.1f} KB")
         
-        # Vector index memory (FLAT algorithm)
-        vector_index_memory = scenario.total_keys * 8 * 4  # dimensions * bytes per float
+        # Enhanced model calculation (in KB)
+        term1 = coef['constant']
+        term2 = coef['per_key'] * num_keys
+        term3 = coef['per_unique_tag'] * unique_tags
+        term4 = coef['per_tag_length'] * avg_tag_len
+        term5 = coef['tag_content'] * (unique_tags * avg_tag_len)
+        term6 = coef['sharing_efficiency'] * tag_sharing_factor
+        term7 = coef['prefix_compression'] * (prefix_sharing_factor * unique_tags)
+        term8 = coef['content_per_key'] * (num_keys * avg_tag_len / max(unique_tags, 1))
         
-        # Total index memory
+        total_memory_kb = term1 + term2 + term3 + term4 + term5 + term6 + term7 + term8
+        
+        if monitor:
+            monitor.log("")
+            monitor.log("📈 Model Calculation:")
+            monitor.log(f"   Total = {term1:.1f} + {term2:.1f} + {term3:.1f} + {term4:.1f} + {term5:.1f} + {term6:.1f} + {term7:.1f} + {term8:.1f}")
+            monitor.log(f"   Total = {total_memory_kb:.1f} KB")
+        
+        # Ensure minimum reasonable value
+        original_total = total_memory_kb
+        total_memory_kb = max(total_memory_kb, num_keys * 0.5)  # At least 0.5KB per key
+        
+        if monitor and total_memory_kb != original_total:
+            monitor.log(f"   Applied minimum: {total_memory_kb:.1f} KB (was {original_total:.1f} KB)")
+        
+        # Break down into components (estimates based on typical ratios)
+        total_memory_bytes = int(total_memory_kb * 1024)
+        
+        # Rough component breakdown (for compatibility with existing code)
+        data_memory = int(total_memory_bytes * 0.25)  # ~25% for raw data
+        tag_index_memory = int(total_memory_bytes * 0.60)  # ~60% for tag index
+        vector_index_memory = int(total_memory_bytes * 0.15)  # ~15% for vector index
         index_memory = tag_index_memory + vector_index_memory
         
-        # Add 30% overhead for Redis internals, fragmentation, etc.
-        total_memory = int((data_memory + index_memory) * 1.3)
+        if monitor:
+            monitor.log("")
+            monitor.log("🏗️  Component Breakdown (estimated ratios):")
+            monitor.log(f"   • Data memory:       {data_memory // 1024:,} KB (25%)")
+            monitor.log(f"   • Tag index:         {tag_index_memory // 1024:,} KB (60%)")
+            monitor.log(f"   • Vector index:      {vector_index_memory // 1024:,} KB (15%)")
+            monitor.log(f"   • Total estimated:   {total_memory_bytes // 1024:,} KB")
+            monitor.log("")
         
         return {
             'data_memory': data_memory,
             'tag_index_memory': tag_index_memory,
             'vector_index_memory': vector_index_memory,
             'index_memory': index_memory,
-            'total_memory': total_memory
+            'total_memory': total_memory_bytes
         }
     
     def validate_memory_requirements(self, scenario: BenchmarkScenario) -> Tuple[bool, str]:
@@ -1767,7 +1858,30 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             # Clean up any existing data
             client.flushall()
             time.sleep(1)
+            #get dataset size before insertion
+            dataset_size = client.execute_command("info", "memory")['used_memory_dataset']
             
+            # Get key count from db info
+            db_info = client.execute_command("info","keyspace")
+            if 'db0' not in db_info:
+                current_keys = 0
+            elif 'db0' in db_info and isinstance(db_info['db0'], dict) and 'keys' in db_info['db0']:
+                current_keys = db_info['db0']['keys']
+
+            elif 'db0' in db_info and isinstance(db_info['db0'], str) and 'keys=' in db_info['db0']:
+                # Parse "keys=123,expires=0,avg_ttl=0" format
+                try:
+                    current_keys = int(db_info['db0'].split('keys=')[1].split(',')[0])
+                except:
+                    assert False, "Expected 'db0' in keyspace info"
+            else:
+                assert False, "Expected 'db0' in keyspace info"
+            while current_keys > 0:
+                assert False, "Database should be empty before starting scenario"
+            assert current_keys == 0, f"Expected empty dataset before starting scenario, dataset size is not zero keys: {current_keys}"
+               
+               
+            total_memory = client.info("memory")['used_memory']
             # Measure baseline
             baseline_memory = client.info("memory")['used_memory']
             info_all = client.execute_command("info","memory")
@@ -1781,7 +1895,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log("")
             
             # Log memory estimates
-            estimates = self.estimate_memory_usage(scenario)
+            estimates = self.estimate_memory_usage(scenario, monitor)
             monitor.log("🎯 ESTIMATED USAGE")
             monitor.log("─" * 50)
             monitor.log(f"📁 Data Memory:      {estimates['data_memory'] // (1024**2):,} MB")
@@ -1982,9 +2096,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 monitor.log("")
             
             # Measure memory after data insertion
-            data_memory = client.info("memory")['used_memory']
-            data_memory_kb = (data_memory - baseline_memory) // 1024
-            
+            data_memory = client.execute_command("info", "memory")['used_memory_dataset']
+            data_memory_kb = data_memory // 1024
+
             monitor.log("🏗️  INDEX CREATION PHASE")
             monitor.log("─" * 50)
             monitor.log(f"📊 Data Memory (no index): {data_memory_kb:,} KB")
@@ -1999,8 +2113,8 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             # Wait for indexing
             self.wait_for_indexing(client, index_name, scenario.total_keys, monitor)            
             # Measure final memory
-            final_memory = client.info("memory")['used_memory']
-            total_memory_kb = (final_memory - baseline_memory) // 1024
+            final_memory = client.execute_command("info", "memory")['used_memory_dataset']
+            total_memory_kb = final_memory // 1024
             index_overhead_kb = (final_memory - data_memory) // 1024
             
             # Get search module info
@@ -2021,7 +2135,8 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 dist_stats['tag_lengths']['mean'],
                 dist_stats['tags_per_key']['mean'],
                 dist_stats['tag_usage']['mean_keys_per_tag'],
-                vector_dims=8
+                vector_dims=8,
+                monitor=monitor
             )
             
             # Extract components for comparison
@@ -2029,9 +2144,22 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             estimated_tag_memory_kb = memory_breakdown['tag_index_kb']
             estimated_vector_memory_kb = memory_breakdown['vector_index_kb']
             
-            # Compare with actual search memory usage
-            actual_tag_memory_kb = max(0, search_memory_kb - vector_memory_kb)
-            tag_index_memory_kb = actual_tag_memory_kb
+            # Use the comprehensive breakdown for proper tag memory calculation
+            # The search_memory_kb includes ALL module memory (key interning, tag index, vector index, metadata, etc.)
+            # So we can't just subtract vector memory - we need to use our comprehensive estimate
+            tag_index_memory_kb = memory_breakdown['tag_index_kb']
+            
+            # For accuracy calculation, we need to estimate actual tag index memory from search module total
+            # This is a rough approximation since we don't have perfect breakdown from search module
+            # Estimated tag index portion = total - (valkey_core + key_interning + vector_index + module_overhead + fragmentation)
+            other_components_kb = (
+                memory_breakdown['valkey_core_kb'] + 
+                memory_breakdown['key_interning_kb'] + 
+                estimated_vector_memory_kb +
+                memory_breakdown['search_module_overhead_kb'] +
+                memory_breakdown['fragmentation_overhead_kb']
+            )
+            actual_tag_memory_kb = max(0, search_memory_kb - other_components_kb)
             
             result = {
                 'scenario_name': scenario.name,
@@ -2447,53 +2575,192 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         scenarios = [
             BenchmarkScenario(
-                name="Quick_SingleUnique",
+                name="Quick_SingleUniqueTag100Keys10K",
                 total_keys=10000,
                 tags_config=TagsConfig(
                     num_keys=10000,
                     tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
-                    tag_length=LengthConfig(avg=20, min=10, max=30),
+                    tag_length=LengthConfig(avg=100, min=100, max=100),
                     sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
                 ),
-                description="1 unique tag per key"
+                description="1 unique tag per key, tag length 100 bytes, 10K keys"
             ),
             BenchmarkScenario(
-                name="Quick_Unique",
-                total_keys=10000,
+                name="Quick_SingleUniqueTag100Keys100K",
+                total_keys=100000,
                 tags_config=TagsConfig(
-                    num_keys=10000,
-                    tags_per_key=TagDistribution(avg=5, min=3, max=8),
-                    tag_length=LengthConfig(avg=20, min=10, max=30),
+                    num_keys=100000,
+                    tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
+                    tag_length=LengthConfig(avg=100, min=100, max=100),
                     sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
                 ),
-                description="Unique tags baseline (5 tags/key)"
+                description="1 unique tag per key, tag length 100 bytes, 100K keys"
             ),
             BenchmarkScenario(
-                name="Quick_SharedPool",
+                name="Quick_SingleUniqueTag1000Keys10K",
                 total_keys=10000,
                 tags_config=TagsConfig(
                     num_keys=10000,
-                    tags_per_key=TagDistribution(avg=5, min=3, max=8),
-                    tag_length=LengthConfig(avg=20, min=10, max=30),
-                    sharing=TagSharingConfig(mode=TagSharingMode.SHARED_POOL, pool_size=500)
+                    tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
+                    tag_length=LengthConfig(avg=1000, min=1000, max=1000),
+                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
                 ),
-                description="Shared pool of 500 tags"
+                description="1 unique tag per key, tag length 1000 bytes, 10K keys"
             ),
             BenchmarkScenario(
-                name="Quick_Groups",
-                total_keys=10000,
+                name="Quick_SingleUniqueTag1000Keys10K",
+                total_keys=100000,
                 tags_config=TagsConfig(
-                    num_keys=10000,
-                    tags_per_key=TagDistribution(avg=5, min=3, max=8),
-                    tag_length=LengthConfig(avg=20, min=10, max=30),
+                    num_keys=100000,
+                    tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
+                    tag_length=LengthConfig(avg=1000, min=1000, max=1000),
+                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+                ),
+                description="1 unique tag per key, tag length 1000 bytes, 100K keys"
+            ),
+            
+            # Tag Sharing Scenarios - Test non-linear effects of keys_per_tag
+            BenchmarkScenario(
+                name="Quick_TagShare_Low",
+                total_keys=50000,
+                tags_config=TagsConfig(
+                    num_keys=50000,
+                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
+                    tag_length=LengthConfig(avg=100, min=100, max=100),
                     sharing=TagSharingConfig(
-                        mode=TagSharingMode.GROUP_BASED,
-                        keys_per_group=100,
-                        tags_per_group=20
+                        mode=TagSharingMode.SHARED_POOL,
+                        pool_size=5000  # 10 keys per tag
                     )
                 ),
-                description="Groups of 100 keys"
-            )
+                description="Tag sharing: 10 keys per tag, 50K keys, 5K unique tags"
+            ),
+            BenchmarkScenario(
+                name="Quick_TagShare_Medium", 
+                total_keys=50000,
+                tags_config=TagsConfig(
+                    num_keys=50000,
+                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
+                    tag_length=LengthConfig(avg=100, min=100, max=100),
+                    sharing=TagSharingConfig(
+                        mode=TagSharingMode.SHARED_POOL,
+                        pool_size=500  # 100 keys per tag
+                    )
+                ),
+                description="Tag sharing: 100 keys per tag, 50K keys, 500 unique tags"
+            ),
+            BenchmarkScenario(
+                name="Quick_TagShare_High",
+                total_keys=50000,
+                tags_config=TagsConfig(
+                    num_keys=50000,
+                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
+                    tag_length=LengthConfig(avg=100, min=100, max=100),
+                    sharing=TagSharingConfig(
+                        mode=TagSharingMode.SHARED_POOL,
+                        pool_size=50  # 1000 keys per tag
+                    )
+                ),
+                description="Tag sharing: 1000 keys per tag, 50K keys, 50 unique tags"
+            ),
+            
+            # Prefix Sharing Scenarios - Test Patricia tree efficiency
+            BenchmarkScenario(
+                name="Quick_PrefixShare_25pct",
+                total_keys=30000,
+                tags_config=TagsConfig(
+                    num_keys=30000,
+                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
+                    tag_length=LengthConfig(avg=64, min=64, max=64),
+                    tag_prefix=PrefixConfig(
+                        enabled=True,
+                        min_shared=16,  # 25% of 64-char tags = 16 chars
+                        max_shared=16,
+                        share_probability=0.8,  # High chance of sharing prefix
+                        prefix_pool_size=4  # 4 different prefixes
+                    ),
+                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+                ),
+                description="Prefix sharing: 25% common prefix, 30K keys, unique tags with shared prefixes"
+            ),
+            BenchmarkScenario(
+                name="Quick_PrefixShare_75pct",
+                total_keys=30000,
+                tags_config=TagsConfig(
+                    num_keys=30000,
+                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
+                    tag_length=LengthConfig(avg=64, min=64, max=64),
+                    tag_prefix=PrefixConfig(
+                        enabled=True,
+                        min_shared=48,  # 75% of 64-char tags = 48 chars
+                        max_shared=48,
+                        share_probability=0.9,  # Very high chance of sharing prefix
+                        prefix_pool_size=4  # 4 different prefixes
+                    ),
+                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+                ),
+                description="Prefix sharing: 75% common prefix, 30K keys, unique tags with shared prefixes"
+            ),
+            
+            # Mixed Scenario - Combined effects
+            BenchmarkScenario(
+                name="Quick_Mixed_HighShare_HighPrefix",
+                total_keys=40000,
+                tags_config=TagsConfig(
+                    num_keys=40000,
+                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
+                    tag_length=LengthConfig(avg=64, min=64, max=64),
+                    tag_prefix=PrefixConfig(
+                        enabled=True,
+                        min_shared=48,  # 75% prefix sharing
+                        max_shared=48,
+                        share_probability=0.95,  # Very high prefix reuse
+                        prefix_pool_size=2  # Only 2 different prefixes
+                    ),
+                    sharing=TagSharingConfig(
+                        mode=TagSharingMode.SHARED_POOL,
+                        pool_size=100  # High sharing: 400 keys per tag
+                    )
+                ),
+                description="Mixed: High tag sharing + 75% prefix overlap, 40K keys, 100 unique tags"
+            ),
+            
+            # BenchmarkScenario(
+            #     name="Quick_Unique",
+            #     total_keys=10000,
+            #     tags_config=TagsConfig(
+            #         num_keys=10000,
+            #         tags_per_key=TagDistribution(avg=5, min=3, max=8),
+            #         tag_length=LengthConfig(avg=20, min=10, max=30),
+            #         sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+            #     ),
+            #     description="Unique tags baseline (5 tags/key)"
+            # ),
+            # BenchmarkScenario(
+            #     name="Quick_SharedPool",
+            #     total_keys=10000,
+            #     tags_config=TagsConfig(
+            #         num_keys=10000,
+            #         tags_per_key=TagDistribution(avg=5, min=3, max=8),
+            #         tag_length=LengthConfig(avg=20, min=10, max=30),
+            #         sharing=TagSharingConfig(mode=TagSharingMode.SHARED_POOL, pool_size=500)
+            #     ),
+            #     description="Shared pool of 500 tags"
+            # ),
+            # BenchmarkScenario(
+            #     name="Quick_Groups",
+            #     total_keys=10000,
+            #     tags_config=TagsConfig(
+            #         num_keys=10000,
+            #         tags_per_key=TagDistribution(avg=5, min=3, max=8),
+            #         tag_length=LengthConfig(avg=20, min=10, max=30),
+            #         sharing=TagSharingConfig(
+            #             mode=TagSharingMode.GROUP_BASED,
+            #             keys_per_group=100,
+            #             tags_per_group=20
+            #         )
+            #     ),
+            #     description="Groups of 100 keys"
+            # )
         ]
         
         results = []
@@ -2535,6 +2802,40 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         monitor.log(f"Results saved to {csv_filename}")
         monitor.log(f"Log file: {log_file}")
         
+        # Print summary table  
+        monitor.log("")
+        monitor.log("┏" + "━" * 118 + "┓")
+        monitor.log("┃" + " " * 35 + "📊 QUICK BENCHMARK RESULTS" + " " * 48 + "┃")
+        monitor.log("┗" + "━" * 118 + "┛")
+        monitor.log("")
+        
+        monitor.log(f"{'Scenario':<30} {'Keys':>8} {'DataKB':>10} {'TagIdxKB':>10} {'TotalKB':>10} {'Time(s)':>8} {'Mode':<15}")
+        monitor.log("─" * 120)
+        
+        for r in results:
+            if r.get('skipped'):
+                monitor.log(f"{r['scenario_name']:<30} "
+                            f"{r['total_keys']:>8,} "
+                            f"{'SKIPPED':>10} "
+                            f"{'':>10} "
+                            f"{'':>10} "
+                            f"{'':>8} "
+                            f"Memory limit exceeded")
+            else:
+                monitor.log(f"{r['scenario_name']:<30} "
+                            f"{r['total_keys']:>8,} "
+                            f"{r['data_memory_kb']:>10,} "
+                            f"{r['tag_index_memory_kb']:>10,} "
+                            f"{r['total_memory_kb']:>10,} "
+                            f"{r['insertion_time']:>8.1f} "
+                            f"{r['tags_config']:<15}")
+        
+        # Analyze results by category
+        monitor.log("")
+        monitor.log("┏" + "━" * 78 + "┓")
+        monitor.log("┃" + " " * 32 + "🔍 KEY FINDINGS" + " " * 31 + "┃")
+        monitor.log("┗" + "━" * 78 + "┛")
+        monitor.log("")
         # Stop the main monitor
         monitor.stop()
     
@@ -2612,6 +2913,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 monitor.log(f"🐌 ASYNC IS SLOWER by {abs(improvement):.1f}%")
         
         monitor.log(f"\nLog file: {log_file}")
+        
         monitor.stop()
     
     def test_stall_detection_example(self):
@@ -2956,7 +3258,8 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                     avg_tags_per_key=estimated_stats['avg_tags_per_key'],
                     avg_keys_per_tag=estimated_stats['avg_keys_per_tag'],
                     vector_dims=8,
-                    hnsw_m=16
+                    hnsw_m=16,
+                    monitor=monitor
                 )
                 
                 monitor.log(f"  📊 Estimated total memory: {estimated_memory['total_estimated_kb']:,} KB")
