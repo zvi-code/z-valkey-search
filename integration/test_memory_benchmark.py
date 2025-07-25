@@ -472,6 +472,13 @@ class ProgressMonitor:
         self.lock = threading.Lock()  # Thread safety
         self.active_index_names = set()  # Set of index names to monitor (set by test)
         
+        # Stall detection
+        self.stall_detection_enabled = True
+        self.stall_threshold_seconds = 30  # Alert if no change for 30 seconds
+        self.last_change_time = time.time()
+        self.last_search_memory = 0
+        self.stall_callback = None  # Optional callback when stall detected
+        
     def start(self):
         """Start the monitoring thread"""
         self.running = True
@@ -522,6 +529,31 @@ class ProgressMonitor:
         with self.lock:
             self.active_index_names.clear()
     
+    def set_stall_detection(self, enabled: bool = True, threshold_seconds: int = 30, callback=None):
+        """Configure stall detection
+        
+        Args:
+            enabled: Whether to enable stall detection
+            threshold_seconds: How many seconds without change before considering it stalled
+            callback: Optional function to call when stall detected (receives monitor instance)
+        """
+        with self.lock:
+            self.stall_detection_enabled = enabled
+            self.stall_threshold_seconds = threshold_seconds
+            self.stall_callback = callback
+            self.last_change_time = time.time()  # Reset on configuration change
+    
+    def collect_diagnostics(self, reason: str = "Manual request"):
+        """Manually trigger diagnostic collection
+        
+        Args:
+            reason: Reason for collecting diagnostics
+        """
+        self.log(f"📊 DIAGNOSTIC COLLECTION: {reason}")
+        # Set a flag that the monitor thread will check
+        with self.lock:
+            self.messages.append("__COLLECT_DIAGNOSTICS__")
+    
     def clear_index_name(self):
         """Backward compatibility: Clear all index names (stop monitoring indexing progress)"""
         self.clear_index_names()
@@ -535,6 +567,70 @@ class ProgressMonitor:
         """Update the current operation status"""
         with self.lock:
             self.current_status.update(status_dict)
+    
+    def _collect_and_log_diagnostics(self, client, reason: str = ""):
+        """Collect and log full diagnostic information
+        
+        Args:
+            client: Valkey client to use for commands
+            reason: Optional reason for collection
+        """
+        try:
+            if reason:
+                self.log(f"📊 FULL DIAGNOSTIC INFO ({reason}):")
+            else:
+                self.log("📊 FULL DIAGNOSTIC INFO:")
+            self.log("─" * 60)
+            
+            # Get all sections of INFO command
+            info_sections = ["server", "clients", "memory", "persistence", 
+                           "stats", "replication", "cpu", "commandstats", 
+                           "keyspace", "modules"]
+            
+            for section in info_sections:
+                try:
+                    info_data = client.execute_command("info", section)
+                    self.log(f"\n[INFO {section.upper()}]")
+                    
+                    # Format the info output
+                    if isinstance(info_data, dict):
+                        for key, value in info_data.items():
+                            self.log(f"  {key}: {value}")
+                    else:
+                        # Raw string format
+                        for line in str(info_data).split('\n'):
+                            if line.strip():
+                                self.log(f"  {line}")
+                except Exception as e:
+                    self.log(f"  ❌ Failed to get {section} info: {e}")
+            
+            # Get index-specific information if indexes are being monitored
+            with self.lock:
+                current_indexes = self.active_index_names.copy()
+            
+            if current_indexes:
+                self.log("\n[INDEX INFORMATION]")
+                for idx_name in current_indexes:
+                    try:
+                        ft_info = client.execute_command("FT.INFO", idx_name)
+                        self.log(f"\nIndex: {idx_name}")
+                        for i in range(0, len(ft_info), 2):
+                            if i + 1 < len(ft_info):
+                                key = ft_info[i].decode() if isinstance(ft_info[i], bytes) else str(ft_info[i])
+                                value = ft_info[i + 1]
+                                if isinstance(value, bytes):
+                                    try:
+                                        value = value.decode()
+                                    except:
+                                        pass
+                                self.log(f"  {key}: {value}")
+                    except Exception as e:
+                        self.log(f"  ❌ Failed to get info for index {idx_name}: {e}")
+            
+            self.log("─" * 60)
+            
+        except Exception as e:
+            self.log(f"❌ Failed to collect diagnostic info: {e}")
     
     def _create_silent_client(self) -> SilentValkeyClient:
         """Create a silent client for monitoring"""
@@ -573,8 +669,12 @@ class ProgressMonitor:
                 with self.lock:
                     while self.messages:
                         message = self.messages.pop(0)
-                        logging.info(message)
-                        sys.stdout.flush()
+                        if message == "__COLLECT_DIAGNOSTICS__":
+                            # Handle diagnostic collection request
+                            self._collect_and_log_diagnostics(client, "Manual request")
+                        else:
+                            logging.info(message)
+                            sys.stdout.flush()
 
                 # Report system stats every 5 seconds
                 if current_time - last_report >= 5.0:
@@ -587,6 +687,11 @@ class ProgressMonitor:
                     memory_info = client.info("memory")
                     current_memory_kb = memory_info['used_memory'] // 1024
                     memory_delta = current_memory_kb - self.last_memory
+                    
+                    # Get search module memory
+                    search_memory_kb = 0
+                    if 'search_used_memory' in search_info:
+                        search_memory_kb = search_info['search_used_memory'] // 1024
                     
                     # Get key count from db info
                     db_info = client.execute_command("info","keyspace")
@@ -633,6 +738,35 @@ class ProgressMonitor:
                                 pass
                     
                     keys_delta = current_keys - self.last_keys
+                    search_memory_delta = search_memory_kb - self.last_search_memory
+                    
+                    # Stall detection
+                    with self.lock:
+                        if self.stall_detection_enabled:
+                            # Check if there's been any change
+                            has_change = (keys_delta != 0 or memory_delta != 0 or search_memory_delta != 0)
+                            
+                            if has_change:
+                                self.last_change_time = current_time
+                            else:
+                                # Check if we've been stalled too long
+                                stall_duration = current_time - self.last_change_time
+                                if stall_duration >= self.stall_threshold_seconds:
+                                    # Log stall warning
+                                    self.log(f"⚠️  STALL DETECTED: No changes in keys/memory for {stall_duration:.0f}s")
+                                    
+                                    # Collect and log full diagnostic info
+                                    self._collect_and_log_diagnostics(client, f"Stall detected after {stall_duration:.0f}s")
+                                    
+                                    # Call callback if configured
+                                    if self.stall_callback:
+                                        try:
+                                            self.stall_callback(self)
+                                        except Exception as e:
+                                            self.log(f"❌ Stall callback error: {e}")
+                                    
+                                    # Reset timer to avoid repeated alerts
+                                    self.last_change_time = current_time - (self.stall_threshold_seconds // 2)
                     
                     # Build status report
                     status_parts = [
@@ -640,6 +774,10 @@ class ProgressMonitor:
                         f"Memory: {current_memory_kb:,} KB (+{memory_delta:,})",
                         f"Keys: {current_keys:,} (+{keys_delta:,})"
                     ]
+                    
+                    # Add search memory if available
+                    if search_memory_kb > 0:
+                        status_parts.append(f"Search: {search_memory_kb:,} KB (+{search_memory_delta:,})")
                     
                     # Add index information if available
                     if index_info:
@@ -675,6 +813,7 @@ class ProgressMonitor:
                     
                     self.last_memory = current_memory_kb
                     self.last_keys = current_keys
+                    self.last_search_memory = search_memory_kb
                     last_report = current_time
                     
             except Exception as e:
@@ -1982,7 +2121,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log(f"  - Memory limit for tests: {available_bytes * 0.5 / (1024**3):.1f} GB (50% of available)\n")
         
         # Create scenarios
-        scenarios = self.create_comprehensive_scenarios(base_keys=100000)
+        scenarios = self.create_comprehensive_scenarios(base_keys=10000000)
         results = []
         
         # CSV filename with timestamp
@@ -2257,6 +2396,51 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         monitor.log(f"\nLog file: {log_file}")
         monitor.stop()
+    
+    def test_stall_detection_example(self):
+        """Example test showing how to use stall detection"""
+        client = self.server.get_new_client()
+        monitor = ProgressMonitor(self.server, "stall_detection_test")
+        
+        # Define what to do when stall detected
+        def on_stall_detected(monitor_instance):
+            monitor_instance.log("🚨 STALL HANDLER: Taking recovery action!")
+            # You could:
+            # - Stop the test gracefully
+            # - Try to recover from the stall
+            # - Send alerts
+            # - Kill stuck processes
+            # - etc.
+        
+        # Configure stall detection: alert after 10 seconds of no activity
+        monitor.set_stall_detection(
+            enabled=True, 
+            threshold_seconds=10,
+            callback=on_stall_detected
+        )
+        
+        monitor.start()
+        
+        try:
+            monitor.log("Starting stall detection test...")
+            
+            # Insert some data
+            for i in range(100):
+                client.hset(f"key:{i}", mapping={"data": f"value{i}"})
+                time.sleep(0.1)
+            
+            monitor.log("Data insertion complete, now waiting...")
+            
+            # Example: Manually trigger diagnostics after 5 seconds
+            time.sleep(5)
+            monitor.collect_diagnostics("Pre-stall check")
+            
+            # Wait for stall detection to trigger (will show full diagnostics)
+            time.sleep(15)
+            
+        finally:
+            monitor.stop()
+            client.flushdb()
     
     def test_verify_memory_function(self):
         """Test the verify_memory function with a small dataset"""
