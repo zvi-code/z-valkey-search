@@ -758,6 +758,56 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         # Wait for all tasks to complete
         try:
             await asyncio.gather(*tasks)
+            monitor.log(f"✅ All async tasks completed, performing final sync...")
+            
+            # CRITICAL FIX: Ensure all async operations are committed and visible
+            # Create a sync client to verify data is committed
+            sync_client = self.get_silent_client()
+            
+            # Force a small delay to ensure all async writes are committed
+            await asyncio.sleep(0.1)
+            
+            # Verify key count is correct using sync client  
+            db_info = sync_client.execute_command("info", "keyspace")
+            current_keys = 0
+            if 'db0' in db_info and isinstance(db_info['db0'], dict) and 'keys' in db_info['db0']:
+                current_keys = db_info['db0']['keys']
+            elif 'db0' in db_info and isinstance(db_info['db0'], str) and 'keys=' in db_info['db0']:
+                # Parse "keys=123,expires=0,avg_ttl=0" format
+                try:
+                    keys_part = db_info['db0'].split(',')[0]
+                    current_keys = int(keys_part.split('=')[1])
+                except:
+                    current_keys = 0
+            
+            expected_keys = keys_processed.get()
+            monitor.log(f"🔍 Post-async verification: Expected {expected_keys:,} keys, Found {current_keys:,} keys")
+            
+            if current_keys < expected_keys:
+                monitor.log(f"⚠️  Warning: Key count mismatch detected. Waiting for sync completion...")
+                # Wait up to 5 seconds for all keys to be visible
+                for i in range(50):  # 50 * 0.1s = 5s max
+                    await asyncio.sleep(0.1)
+                    db_info = sync_client.execute_command("info", "keyspace")
+                    if 'db0' in db_info and isinstance(db_info['db0'], dict) and 'keys' in db_info['db0']:
+                        current_keys = db_info['db0']['keys']
+                    elif 'db0' in db_info and isinstance(db_info['db0'], str) and 'keys=' in db_info['db0']:
+                        try:
+                            keys_part = db_info['db0'].split(',')[0]
+                            current_keys = int(keys_part.split('=')[1])
+                        except:
+                            current_keys = 0
+                    
+                    if current_keys >= expected_keys:
+                        monitor.log(f"✅ Sync complete: {current_keys:,} keys now visible after {(i+1)*0.1:.1f}s")
+                        break
+                else:
+                    monitor.log(f"⚠️  Still missing keys after 5s wait: {current_keys:,}/{expected_keys:,}")
+            else:
+                monitor.log(f"✅ All keys immediately visible: {current_keys:,}/{expected_keys:,}")
+            
+            sync_client.close()
+            
         except Exception as e:
             monitor.log(f"❌ Async batch failed: {e}")
         finally:
@@ -1337,8 +1387,8 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 num_keys=scenario.total_keys,
                 schema=schema,
                 tags_config=scenario.tags_config,
-                key_length=LengthConfig(avg=16, min=16, max=16),  # Fixed length keys
-                batch_size=max(500, min(2000, scenario.total_keys // 20)),  # Optimize batch size
+                key_length=LengthConfig(avg=64, min=64, max=64),  # Fixed length keys
+                batch_size=100,  # Optimize batch size
                 seed=42
             )
             
@@ -1447,6 +1497,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             info_all = client.execute_command("info","memory")
             search_info = client.execute_command("info","modules")
             
+            # Clear any ongoing status updates since insertion is complete
+            monitor.update_status({})
+            
             monitor.log("✅ INSERTION COMPLETE")
             monitor.log("─" * 50)
             monitor.log(f"📊 Keys Inserted: {total_keys_inserted:,}")
@@ -1538,10 +1591,13 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 'estimated_tag_memory_kb': estimated_tag_memory_kb,
                 'estimated_total_memory_kb': estimated_total_kb,
                 'estimated_vector_memory_kb': estimated_vector_memory_kb,
+                'search_used_memory_kb': search_memory_kb,  # Add missing field for fuzzy test
                 'tag_memory_accuracy': (estimated_tag_memory_kb / max(1, actual_tag_memory_kb)) if actual_tag_memory_kb > 0 else 0,
                 'total_memory_accuracy': (estimated_total_kb / max(1, search_memory_kb)) if search_memory_kb > 0 else 0,
                 'vector_memory_kb': vector_memory_kb,
                 'insertion_time': insertion_time,
+                'insertion_time_sec': insertion_time,  # Add for fuzzy test compatibility
+                'keys_per_second': total_keys_inserted/insertion_time if insertion_time > 0 else 0,  # Add for fuzzy test
                 'tags_config': str(scenario.tags_config.sharing.mode.value),
                 # Memory breakdown components
                 'valkey_core_kb': memory_breakdown['valkey_core_kb'],
@@ -1626,8 +1682,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             except:
                 pass
             
-            # Clear index monitoring
+            # Clear index monitoring and status
             monitor.clear_index_names()
+            monitor.update_status({})  # Clear any lingering status updates
             
         finally:
             # Clean up resources
@@ -1638,7 +1695,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         return result
     
-    def create_comprehensive_scenarios(self, base_keys: int = 100000) -> List[BenchmarkScenario]:
+    def create_comprehensive_scenarios(self, base_keys: int = 5000000) -> List[BenchmarkScenario]:
         """Create comprehensive test scenarios"""
         scenarios = []
         
@@ -1649,7 +1706,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             tags_config=TagsConfig(
                 num_keys=base_keys,
                 tags_per_key=TagDistribution(avg=5, min=3, max=8),
-                tag_length=LengthConfig(avg=20, min=10, max=30),
+                tag_length=LengthConfig(avg=200, min=10, max=300),
                 sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
             ),
             description="Unique tags per key (no sharing)"
@@ -1669,7 +1726,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         ))
         
         # 3. Shared pool with varying pool sizes
-        for pool_size in [100, 10000]:
+        for pool_size in [100, 100000]:
             scenarios.append(BenchmarkScenario(
                 name=f"SharedPool_{pool_size}",
                 total_keys=base_keys,
@@ -1687,18 +1744,18 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             ))
         
         # 4. Group-based sharing (realistic scenarios)
-        for group_size in [100, 10000]:
+        for group_size in [100, 100000]:
             scenarios.append(BenchmarkScenario(
                 name=f"GroupBased_{group_size}",
                 total_keys=base_keys,
                 tags_config=TagsConfig(
                     num_keys=base_keys,
                     tags_per_key=TagDistribution(avg=5, min=3, max=8),
-                    tag_length=LengthConfig(avg=20, min=10, max=30),
+                    tag_length=LengthConfig(avg=200, min=10, max=3000),
                     sharing=TagSharingConfig(
                         mode=TagSharingMode.GROUP_BASED,
                         keys_per_group=group_size,
-                        tags_per_group=20
+                        tags_per_group=2000
                     )
                 ),
                 description=f"Groups of {group_size} keys sharing 20 tags"
@@ -2105,16 +2162,16 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 'description': '500K keys, unique tags (no sharing), 3 tags/key'
             },
             {
-                'name': 'Large_SharedPool_1M',
-                'total_keys': 1000000,
+                'name': 'Large_SharedPool_10M',
+                'total_keys': 10000000,
                 'tags_config': TagsConfig(
-                    num_keys=1000000,
-                    tags_per_key=TagDistribution(avg=5, min=3, max=7),
-                    tag_length=LengthConfig(avg=30, min=25, max=35),
+                    num_keys=10000000,
+                    tags_per_key=TagDistribution(avg=5, min=3, max=700),
+                    tag_length=LengthConfig(avg=300, min=25, max=905),
                     sharing=TagSharingConfig(
                         mode=TagSharingMode.SHARED_POOL,
                         pool_size=10000,
-                        reuse_probability=0.7
+                        reuse_probability=0.3
                     )
                 ),
                 'description': '1M keys, shared pool (10K unique tags), 5 tags/key'

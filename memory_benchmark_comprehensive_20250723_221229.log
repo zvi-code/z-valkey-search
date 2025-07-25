@@ -1,0 +1,454 @@
+2025-07-23 22:12:29 - INFO - Starting comprehensive - Log file: memory_benchmark_comprehensive_20250723_221229.log
+2025-07-23 22:12:29 - INFO - 📊 Monitoring started for: comprehensive
+2025-07-23 22:12:29 - INFO - [Thread-278961143858976|MainThread] 📊 Started progress monitor for: comprehensive
+2025-07-23 22:12:29 - INFO - [Thread-278961143858976|MainThread] === COMPREHENSIVE MEMORY BENCHMARK ===
+2025-07-23 22:12:29 - INFO - [Thread-278961143858976|MainThread] Testing various tag sharing patterns and configurations
+
+2025-07-23 22:12:30 - INFO - [Thread-278961143858976|MainThread] System Memory Status:
+2025-07-23 22:12:30 - INFO - [Thread-278961143858976|MainThread]   - Total: 497.7 GB
+2025-07-23 22:12:30 - INFO - [Thread-278961143858976|MainThread]   - Available: 489.6 GB
+2025-07-23 22:12:30 - INFO - [Thread-278961143858976|MainThread]   - Used: 1.6%
+2025-07-23 22:12:30 - INFO - [Thread-278961143858976|MainThread]   - Memory limit for tests: 244.8 GB (50% of available)
+
+2025-07-23 22:12:30 - INFO - [Thread-278961143858976|MainThread] --- Scenario 1/15: Baseline_Unique ---
+2025-07-23 22:12:30 - INFO - [Thread-278961143858976|MainThread]   Description: Unique tags per key (no sharing)
+2025-07-23 22:12:30 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:30 - INFO - [Thread-278961143858976|MainThread] ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+2025-07-23 22:12:30 - INFO - [Thread-278961143858976|MainThread] ┃ 🚀 STARTING SCENARIO: Baseline_Unique                                    ┃
+2025-07-23 22:12:30 - INFO - [Thread-278961143858976|MainThread] ┃    Unique tags per key (no sharing)                                  ┃
+2025-07-23 22:12:30 - INFO - [Thread-278961143858976|MainThread] ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+2025-07-23 22:12:30 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:30 - INFO - [Thread-278961143858976|MainThread] 📋 Memory Validation: Memory check passed: ~0.1GB required, 489.6GB available
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] 📊 BASELINE MEASUREMENTS
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] 💾 System Memory: 5.62M
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] 🔍 Search Memory: 18.02KiB
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] 📈 Baseline: 5,730 KB
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] 🎯 ESTIMATED USAGE
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] 📁 Data Memory:      34 MB
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] 🏷️  Tag Index:       47 MB
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] 🎯 Vector Index:     3 MB
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] 💰 Total (overhead): 110 MB
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] ⚡ DATA INSERTION PHASE
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] 📝 Generating: 100,000 keys
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] 🚀 Mode: ASYNC I/O with 50 concurrent tasks
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] 📦 Batch size: 2,000
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] 🚀 Starting ASYNC data ingestion
+2025-07-23 22:12:31 - INFO - [Thread-278961143858976|MainThread] 🚀 Using ASYNC I/O: 50 concurrent tasks sharing 5 clients
+2025-07-23 22:12:34 - INFO - 🔄 [comprehensive] Time: 5s | Memory: 5,771 KB (+5,771) | Keys: 0 (+0)
+2025-07-23 22:12:35 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::used_memory_human=5.64M
+2025-07-23 22:12:35 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::search_used_memory_human=18.02KiB
+2025-07-23 22:12:39 - INFO - 🔄 [comprehensive] Time: 10s | Memory: 43,683 KB (+37,912) | Keys: 100,000 (+100,000) | Phase: Async Insertion | Progress: 60,000/100,000 (60.0%) | Speed: 6391 keys/sec | Tasks: 50 async | ETA: 6s
+2025-07-23 22:12:40 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::used_memory_human=42.66M
+2025-07-23 22:12:40 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::search_used_memory_human=18.02KiB
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] ✅ INSERTION COMPLETE
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] 📊 Keys Inserted: 100,000
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] ⏱️  Time Taken: 9.6s
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] 🚀 Speed: 10397 keys/sec
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] 💾 System Memory: 40.92M
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] 🔍 Search Memory: 18.02KiB
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] 📈 DATA DISTRIBUTION STATS
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] 🏷️  Tag Lengths: min=10, max=30, avg=20.0, p95=29
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] 📝 Tags/Key: min=3, max=8, avg=5.5, p95=8
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] 🔄 Tag Reuse: 550441 unique tags, avg keys/tag=1.0, max=1
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] 🏗️  INDEX CREATION PHASE
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] 📊 Data Memory (no index): 36,173 KB
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] 🏷️  Index Name: idx_baseline_unique
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread]     Starting search index creation for 100,000 documents...
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] Index is still processing::used_memory_human=41.19M
+2025-07-23 22:12:40 - INFO - [Thread-278961143858976|MainThread] Index is still processing::search_used_memory_human=182.70KiB
+2025-07-23 22:12:41 - INFO - [Thread-278961143858976|MainThread] Index is still processing::used_memory_human=148.52M
+2025-07-23 22:12:41 - INFO - [Thread-278961143858976|MainThread] Index is still processing::search_used_memory_human=103.81MiB
+2025-07-23 22:12:41 - INFO - [Thread-278961143858976|MainThread]     Search Index: 41,843/100,000 docs (41.8%) | 41661 docs/sec | Memory: 152,075 KB | State: backfill_in_progress, Queue: 19659, Backfill: 0.4% | ETA: 1s
+2025-07-23 22:12:42 - INFO - [Thread-278961143858976|MainThread] Index is still processing::used_memory_human=240.83M
+2025-07-23 22:12:42 - INFO - [Thread-278961143858976|MainThread] Index is still processing::search_used_memory_human=196.66MiB
+2025-07-23 22:12:42 - INFO - [Thread-278961143858976|MainThread]     Search Index: 82,840/100,000 docs (82.8%) | 41245 docs/sec | Memory: 246,596 KB | State: backfill_in_progress, Queue: 17138, Backfill: 0.8% | ETA: 0s
+2025-07-23 22:12:43 - INFO - [Thread-278961143858976|MainThread] Index is still processing::used_memory_human=262.73M
+2025-07-23 22:12:43 - INFO - [Thread-278961143858976|MainThread] Index is still processing::search_used_memory_human=221.73MiB
+2025-07-23 22:12:43 - INFO - [Thread-278961143858976|MainThread]     Search Index: 100,000/100,000 docs (100.0%) | 33214 docs/sec | Memory: 269,032 KB | State: ready | ETA: 0s
+2025-07-23 22:12:43 - INFO - [Thread-278961143858976|MainThread]     ✓ Search indexing complete: 100,000 docs indexed in 3.0s (avg 33214 docs/sec)
+2025-07-23 22:12:43 - INFO - [Thread-278961143858976|MainThread]     ✓ Final memory usage: 269,032 KB
+2025-07-23 22:12:43 - INFO - [Thread-278961143858976|MainThread]     ✓ Index state: ready, queue: 0, backfill: 1.0%
+2025-07-23 22:12:43 - INFO - [Thread-278961143858976|MainThread] Indexing DONE::used_memory_human=262.73M
+2025-07-23 22:12:43 - INFO - [Thread-278961143858976|MainThread] Indexing DONE::search_used_memory_human=221.73MiB
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread] 🎯 FINAL RESULTS
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread] ────────────────────────────────────────────────────────────
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread] 📁 Data Memory:          36,173 KB
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread] 🔍 Search Module Total:  227,054 KB (actual)
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread] 🧮 Search Module Est.:   279,061 KB (122.9% accuracy)
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread] 📊 COMPREHENSIVE MEMORY BREAKDOWN:
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread]    🗄️  Valkey Core:       28,058 KB
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread]    🔗 Key Interning:     10,937 KB
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread]    🏷️  Tag Index:         168,528 KB (est) vs 223,929 KB (actual)
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread]    🎯 Vector Index:      26,651 KB (est) vs 3,125 KB (calc)
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread]       • Vector data:     3,125 KB
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread]       • HNSW L0 graph:   14,062 KB (32 conn/node)
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread]       • HNSW higher:     664 KB
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread]       • Mappings:        8,203 KB
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread]    ⚙️  Module Overhead:   11 KB
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread]    🔀 Fragmentation:     55,812 KB
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread] ────────────────────────────────────────────────────────────
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread] 📈 Index Overhead:       227,128 KB
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread] 💰 Total Memory:         263,301 KB
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread] 🎯 ESTIMATION ACCURACY:
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread]    ✅ Total: 1.23x (good overall accuracy)
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread]    ✅ Tag: 0.75x (good tag index accuracy)
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:45 - INFO - [Thread-278961143858976|MainThread]   Distribution details saved to distributions_Baseline_Unique_20250723_221244.json
+2025-07-23 22:12:45 - INFO - 🔄 [comprehensive] Time: 16s | Memory: 62,536 KB (+18,853) | Keys: 100,000 (+0) | Phase: Async Insertion | Progress: 100,000/100,000 (100.0%) | Speed: 10399 keys/sec | Tasks: 50 async | ETA: 0s
+2025-07-23 22:12:46 - INFO - [Thread-278961143858976|MainThread] Results appended to comprehensive_benchmark_results_20250723_221229.csv
+2025-07-23 22:12:46 - INFO - [Thread-278961143858976|MainThread] --- Scenario 2/15: Perfect_Overlap ---
+2025-07-23 22:12:46 - INFO - [Thread-278961143858976|MainThread]   Description: All keys share same 5 tags
+2025-07-23 22:12:46 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:46 - INFO - [Thread-278961143858976|MainThread] ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+2025-07-23 22:12:46 - INFO - [Thread-278961143858976|MainThread] ┃ 🚀 STARTING SCENARIO: Perfect_Overlap                                    ┃
+2025-07-23 22:12:46 - INFO - [Thread-278961143858976|MainThread] ┃    All keys share same 5 tags                                        ┃
+2025-07-23 22:12:46 - INFO - [Thread-278961143858976|MainThread] ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+2025-07-23 22:12:46 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:46 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::used_memory_human=61.05M
+2025-07-23 22:12:46 - INFO - [Thread-278961143858976|MainThread] 📋 Memory Validation: Memory check passed: ~0.0GB required, 489.3GB available
+2025-07-23 22:12:46 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::search_used_memory_human=20.06MiB
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] 📊 BASELINE MEASUREMENTS
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] 💾 System Memory: 25.78M
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] 🔍 Search Memory: 20.06MiB
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] 📈 Baseline: 26,401 KB
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] 🎯 ESTIMATED USAGE
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] 📁 Data Memory:      34 MB
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] 🏷️  Tag Index:       1 MB
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] 🎯 Vector Index:     3 MB
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] 💰 Total (overhead): 50 MB
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] ⚡ DATA INSERTION PHASE
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] 📝 Generating: 100,000 keys
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] 🚀 Mode: ASYNC I/O with 50 concurrent tasks
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] 📦 Batch size: 2,000
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] 🚀 Starting ASYNC data ingestion
+2025-07-23 22:12:47 - INFO - [Thread-278961143858976|MainThread] 🚀 Using ASYNC I/O: 50 concurrent tasks sharing 5 clients
+2025-07-23 22:12:50 - INFO - 🔄 [comprehensive] Time: 21s | Memory: 64,644 KB (+2,108) | Keys: 100,000 (+0) | Phase: Async Insertion | Progress: 60,000/100,000 (60.0%) | Speed: 14020 keys/sec | Tasks: 50 async | ETA: 3s
+2025-07-23 22:12:51 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::used_memory_human=63.13M
+2025-07-23 22:12:51 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::search_used_memory_human=20.06MiB
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] ✅ INSERTION COMPLETE
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] 📊 Keys Inserted: 100,000
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] ⏱️  Time Taken: 4.5s
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] 🚀 Speed: 22172 keys/sec
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] 💾 System Memory: 61.39M
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] 🔍 Search Memory: 20.06MiB
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] 📈 DATA DISTRIBUTION STATS
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] 🏷️  Tag Lengths: min=16, max=29, avg=21.2, p95=29
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] 📝 Tags/Key: min=5, max=5, avg=5.0, p95=5
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] 🔄 Tag Reuse: 5 unique tags, avg keys/tag=100000.0, max=100000
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] 🏗️  INDEX CREATION PHASE
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] 📊 Data Memory (no index): 36,460 KB
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] 🏷️  Index Name: idx_perfect_overlap
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread]     Starting search index creation for 100,000 documents...
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] Index is still processing::used_memory_human=61.58M
+2025-07-23 22:12:51 - INFO - [Thread-278961143858976|MainThread] Index is still processing::search_used_memory_human=20.22MiB
+2025-07-23 22:12:52 - INFO - [Thread-278961143858976|MainThread] Index is still processing::used_memory_human=122.13M
+2025-07-23 22:12:52 - INFO - [Thread-278961143858976|MainThread] Index is still processing::search_used_memory_human=80.03MiB
+2025-07-23 22:12:52 - INFO - [Thread-278961143858976|MainThread]     Search Index: 57,591/100,000 docs (57.6%) | 54776 docs/sec | Memory: 125,073 KB | State: backfill_in_progress, Queue: 3914, Backfill: 0.6% | ETA: 1s
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] Index is still processing::used_memory_human=137.22M
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] Index is still processing::search_used_memory_human=95.87MiB
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]     Search Index: 100,000/100,000 docs (100.0%) | 48692 docs/sec | Memory: 140,511 KB | State: ready | ETA: 0s
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]     ✓ Search indexing complete: 100,000 docs indexed in 2.1s (avg 48691 docs/sec)
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]     ✓ Final memory usage: 140,511 KB
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]     ✓ Index state: ready, queue: 0, backfill: 1.0%
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] Indexing DONE::used_memory_human=137.22M
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] Indexing DONE::search_used_memory_human=95.87MiB
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] 🎯 FINAL RESULTS
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] ────────────────────────────────────────────────────────────
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] 📁 Data Memory:          36,460 KB
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] 🔍 Search Module Total:  98,170 KB (actual)
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] 🧮 Search Module Est.:   91,532 KB (93.2% accuracy)
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] 📊 COMPREHENSIVE MEMORY BREAKDOWN:
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]    🗄️  Valkey Core:       27,578 KB
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]    🔗 Key Interning:     10,937 KB
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]    🏷️  Tag Index:         18,985 KB (est) vs 95,045 KB (actual)
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]    🎯 Vector Index:      26,651 KB (est) vs 3,125 KB (calc)
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]       • Vector data:     3,125 KB
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]       • HNSW L0 graph:   14,062 KB (32 conn/node)
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]       • HNSW higher:     664 KB
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]       • Mappings:        8,203 KB
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]    ⚙️  Module Overhead:   11 KB
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]    🔀 Fragmentation:     18,306 KB
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] ────────────────────────────────────────────────────────────
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] 📈 Index Overhead:       77,649 KB
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] 💰 Total Memory:         114,110 KB
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] 🎯 ESTIMATION ACCURACY:
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]    ✅ Total: 0.93x (good overall accuracy)
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]    ⚠️  Tag: 0.20x (underestimating) - complex sharing patterns?
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]   Distribution details saved to distributions_Perfect_Overlap_20250723_221252.json
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] Results appended to comprehensive_benchmark_results_20250723_221229.csv
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] --- Scenario 3/15: SharedPool_100 ---
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread]   Description: Shared pool of 100 tags
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] ┃ 🚀 STARTING SCENARIO: SharedPool_100                                     ┃
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] ┃    Shared pool of 100 tags                                           ┃
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:53 - INFO - [Thread-278961143858976|MainThread] 📋 Memory Validation: Memory check passed: ~0.0GB required, 489.3GB available
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] 📊 BASELINE MEASUREMENTS
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] 💾 System Memory: 25.78M
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] 🔍 Search Memory: 20.06MiB
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] 📈 Baseline: 26,401 KB
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] 🎯 ESTIMATED USAGE
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] 📁 Data Memory:      34 MB
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] 🏷️  Tag Index:       1 MB
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] 🎯 Vector Index:     3 MB
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] 💰 Total (overhead): 50 MB
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] ⚡ DATA INSERTION PHASE
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] 📝 Generating: 100,000 keys
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] 🚀 Mode: ASYNC I/O with 50 concurrent tasks
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] 📦 Batch size: 2,000
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] 🚀 Starting ASYNC data ingestion
+2025-07-23 22:12:54 - INFO - [Thread-278961143858976|MainThread] 🚀 Using ASYNC I/O: 50 concurrent tasks sharing 5 clients
+2025-07-23 22:12:55 - INFO - 🔄 [comprehensive] Time: 26s | Memory: 26,400 KB (+-38,244) | Keys: 0 (+-100,000) | Phase: Async Insertion | Progress: 100,000/100,000 (100.0%) | Speed: 22183 keys/sec | Tasks: 50 async | ETA: 0s
+2025-07-23 22:12:56 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::used_memory_human=25.78M
+2025-07-23 22:12:56 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::search_used_memory_human=20.06MiB
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] ✅ INSERTION COMPLETE
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] 📊 Keys Inserted: 100,000
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] ⏱️  Time Taken: 5.8s
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] 🚀 Speed: 17118 keys/sec
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] 💾 System Memory: 61.13M
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] 🔍 Search Memory: 20.06MiB
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] 📈 DATA DISTRIBUTION STATS
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] 🏷️  Tag Lengths: min=10, max=30, avg=20.1, p95=30
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] 📝 Tags/Key: min=3, max=8, avg=5.5, p95=8
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] 🔄 Tag Reuse: 100 unique tags, avg keys/tag=5498.2, max=5700
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] 🏗️  INDEX CREATION PHASE
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] 📊 Data Memory (no index): 36,192 KB
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] 🏷️  Index Name: idx_sharedpool_100
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread]     Starting search index creation for 100,000 documents...
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] Index is still processing::used_memory_human=61.32M
+2025-07-23 22:12:59 - INFO - [Thread-278961143858976|MainThread] Index is still processing::search_used_memory_human=20.22MiB
+2025-07-23 22:13:00 - INFO - 🔄 [comprehensive] Time: 31s | Memory: 133,002 KB (+106,602) | Keys: 100,000 (+100,000) | Index[idx_sharedpool_100]: 59015 docs, queue: 2354, state: backfill_in_progress | Phase: Async Insertion | Progress: 100,000/100,000 (100.0%) | Speed: 17125 keys/sec | Tasks: 50 async | ETA: 0s
+2025-07-23 22:13:01 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::used_memory_human=129.91M
+2025-07-23 22:13:01 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::search_used_memory_human=88.27MiB
+2025-07-23 22:13:01 - INFO - [Thread-278961143858976|MainThread] Index is still processing::used_memory_human=129.88M
+2025-07-23 22:13:01 - INFO - [Thread-278961143858976|MainThread] Index is still processing::search_used_memory_human=88.30MiB
+2025-07-23 22:13:01 - INFO - [Thread-278961143858976|MainThread]     Search Index: 58,637/100,000 docs (58.6%) | 55831 docs/sec | Memory: 133,002 KB | State: backfill_in_progress, Queue: 2863, Backfill: 0.6% | ETA: 1s
+2025-07-23 22:13:01 - INFO - [Thread-278961143858976|MainThread] Index is still processing::used_memory_human=162.03M
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] Index is still processing::search_used_memory_human=120.94MiB
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]     Search Index: 100,000/100,000 docs (100.0%) | 48718 docs/sec | Memory: 165,917 KB | State: ready | ETA: 0s
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]     ✓ Search indexing complete: 100,000 docs indexed in 2.1s (avg 48718 docs/sec)
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]     ✓ Final memory usage: 165,917 KB
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]     ✓ Index state: ready, queue: 0, backfill: 1.0%
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] Indexing DONE::used_memory_human=162.03M
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] Indexing DONE::search_used_memory_human=120.94MiB
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] 🎯 FINAL RESULTS
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] ────────────────────────────────────────────────────────────
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] 📁 Data Memory:          36,192 KB
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] 🔍 Search Module Total:  123,842 KB (actual)
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] 🧮 Search Module Est.:   93,678 KB (75.6% accuracy)
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] 📊 COMPREHENSIVE MEMORY BREAKDOWN:
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]    🗄️  Valkey Core:       28,101 KB
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]    🔗 Key Interning:     10,937 KB
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]    🏷️  Tag Index:         20,178 KB (est) vs 120,717 KB (actual)
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]    🎯 Vector Index:      26,651 KB (est) vs 3,125 KB (calc)
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]       • Vector data:     3,125 KB
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]       • HNSW L0 graph:   14,062 KB (32 conn/node)
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]       • HNSW higher:     664 KB
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]       • Mappings:        8,203 KB
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]    ⚙️  Module Overhead:   11 KB
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]    🔀 Fragmentation:     18,735 KB
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] ────────────────────────────────────────────────────────────
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] 📈 Index Overhead:       103,322 KB
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] 💰 Total Memory:         139,515 KB
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] 🎯 ESTIMATION ACCURACY:
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]    ✅ Total: 0.76x (good overall accuracy)
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]    ⚠️  Tag: 0.17x (underestimating) - complex sharing patterns?
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]   Distribution details saved to distributions_SharedPool_100_20250723_221301.json
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] Results appended to comprehensive_benchmark_results_20250723_221229.csv
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] --- Scenario 4/15: SharedPool_10000 ---
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread]   Description: Shared pool of 10000 tags
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] ┃ 🚀 STARTING SCENARIO: SharedPool_10000                                   ┃
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] ┃    Shared pool of 10000 tags                                         ┃
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:02 - INFO - [Thread-278961143858976|MainThread] 📋 Memory Validation: Memory check passed: ~0.1GB required, 489.4GB available
+2025-07-23 22:13:03 - INFO - [Thread-278961143858976|MainThread] 📊 BASELINE MEASUREMENTS
+2025-07-23 22:13:03 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:13:03 - INFO - [Thread-278961143858976|MainThread] 💾 System Memory: 25.78M
+2025-07-23 22:13:03 - INFO - [Thread-278961143858976|MainThread] 🔍 Search Memory: 20.06MiB
+2025-07-23 22:13:03 - INFO - [Thread-278961143858976|MainThread] 📈 Baseline: 26,401 KB
+2025-07-23 22:13:03 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:03 - INFO - [Thread-278961143858976|MainThread] 🎯 ESTIMATED USAGE
+2025-07-23 22:13:03 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:13:03 - INFO - [Thread-278961143858976|MainThread] 📁 Data Memory:      34 MB
+2025-07-23 22:13:03 - INFO - [Thread-278961143858976|MainThread] 🏷️  Tag Index:       2 MB
+2025-07-23 22:13:03 - INFO - [Thread-278961143858976|MainThread] 🎯 Vector Index:     3 MB
+2025-07-23 22:13:03 - INFO - [Thread-278961143858976|MainThread] 💰 Total (overhead): 52 MB
+2025-07-23 22:13:03 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:03 - INFO - [Thread-278961143858976|MainThread] ⚡ DATA INSERTION PHASE
+2025-07-23 22:13:03 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:13:03 - INFO - [Thread-278961143858976|MainThread] 📝 Generating: 100,000 keys
+2025-07-23 22:13:04 - INFO - [Thread-278961143858976|MainThread] 🚀 Mode: ASYNC I/O with 50 concurrent tasks
+2025-07-23 22:13:04 - INFO - [Thread-278961143858976|MainThread] 📦 Batch size: 2,000
+2025-07-23 22:13:04 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:04 - INFO - [Thread-278961143858976|MainThread] 🚀 Starting ASYNC data ingestion
+2025-07-23 22:13:04 - INFO - [Thread-278961143858976|MainThread] 🚀 Using ASYNC I/O: 50 concurrent tasks sharing 5 clients
+2025-07-23 22:13:06 - INFO - 🔄 [comprehensive] Time: 37s | Memory: 26,401 KB (+-106,601) | Keys: 0 (+-100,000) | Phase: Async Insertion | Progress: 100,000/100,000 (100.0%) | Speed: 17125 keys/sec | Tasks: 50 async | ETA: 0s
+2025-07-23 22:13:07 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::used_memory_human=25.78M
+2025-07-23 22:13:07 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::search_used_memory_human=20.06MiB
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] ✅ INSERTION COMPLETE
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] 📊 Keys Inserted: 100,000
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] ⏱️  Time Taken: 6.0s
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] 🚀 Speed: 16540 keys/sec
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] 💾 System Memory: 61.09M
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] 🔍 Search Memory: 20.06MiB
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] 📈 DATA DISTRIBUTION STATS
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] 🏷️  Tag Lengths: min=10, max=30, avg=20.0, p95=29
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] 📝 Tags/Key: min=3, max=8, avg=5.5, p95=8
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] 🔄 Tag Reuse: 10000 unique tags, avg keys/tag=55.0, max=94
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] 🏗️  INDEX CREATION PHASE
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] 📊 Data Memory (no index): 36,152 KB
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] 🏷️  Index Name: idx_sharedpool_10000
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread]     Starting search index creation for 100,000 documents...
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] Index is still processing::used_memory_human=61.28M
+2025-07-23 22:13:10 - INFO - [Thread-278961143858976|MainThread] Index is still processing::search_used_memory_human=20.22MiB
+2025-07-23 22:13:11 - INFO - [Thread-278961143858976|MainThread] Index is still processing::used_memory_human=141.95M
+2025-07-23 22:13:11 - INFO - [Thread-278961143858976|MainThread] Index is still processing::search_used_memory_human=99.04MiB
+2025-07-23 22:13:11 - INFO - [Thread-278961143858976|MainThread]     Search Index: 58,276/100,000 docs (58.3%) | 54454 docs/sec | Memory: 145,355 KB | State: backfill_in_progress, Queue: 3155, Backfill: 0.6% | ETA: 1s
+2025-07-23 22:13:11 - INFO - 🔄 [comprehensive] Time: 42s | Memory: 170,428 KB (+144,027) | Keys: 100,000 (+100,000) | Index[idx_sharedpool_10000]: 100000 docs, queue: 0, state: ready | Phase: Async Insertion | Progress: 100,000/100,000 (100.0%) | Speed: 16548 keys/sec | Tasks: 50 async | ETA: 0s
+2025-07-23 22:13:12 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::used_memory_human=166.43M
+2025-07-23 22:13:12 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::search_used_memory_human=125.39MiB
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] Index is still processing::used_memory_human=166.43M
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] Index is still processing::search_used_memory_human=125.39MiB
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]     Search Index: 100,000/100,000 docs (100.0%) | 48250 docs/sec | Memory: 170,429 KB | State: ready | ETA: 0s
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]     ✓ Search indexing complete: 100,000 docs indexed in 2.1s (avg 48250 docs/sec)
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]     ✓ Final memory usage: 170,429 KB
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]     ✓ Index state: ready, queue: 0, backfill: 1.0%
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] Indexing DONE::used_memory_human=166.43M
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] Indexing DONE::search_used_memory_human=125.39MiB
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] 🎯 FINAL RESULTS
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] ────────────────────────────────────────────────────────────
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] 📁 Data Memory:          36,152 KB
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] 🔍 Search Module Total:  128,395 KB (actual)
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] 🧮 Search Module Est.:   96,998 KB (75.5% accuracy)
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] 📊 COMPREHENSIVE MEMORY BREAKDOWN:
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]    🗄️  Valkey Core:       28,074 KB
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]    🔗 Key Interning:     10,937 KB
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]    🏷️  Tag Index:         22,861 KB (est) vs 125,270 KB (actual)
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]    🎯 Vector Index:      26,651 KB (est) vs 3,125 KB (calc)
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]       • Vector data:     3,125 KB
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]       • HNSW L0 graph:   14,062 KB (32 conn/node)
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]       • HNSW higher:     664 KB
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]       • Mappings:        8,203 KB
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]    ⚙️  Module Overhead:   11 KB
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]    🔀 Fragmentation:     19,399 KB
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] ────────────────────────────────────────────────────────────
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] 📈 Index Overhead:       107,875 KB
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] 💰 Total Memory:         144,028 KB
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] 🎯 ESTIMATION ACCURACY:
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]    ✅ Total: 0.76x (good overall accuracy)
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]    ⚠️  Tag: 0.18x (underestimating) - complex sharing patterns?
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]   Distribution details saved to distributions_SharedPool_10000_20250723_221311.json
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] Results appended to comprehensive_benchmark_results_20250723_221229.csv
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] --- Scenario 5/15: GroupBased_100 ---
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread]   Description: Groups of 100 keys sharing 20 tags
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] ┃ 🚀 STARTING SCENARIO: GroupBased_100                                     ┃
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] ┃    Groups of 100 keys sharing 20 tags                                ┃
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:12 - INFO - [Thread-278961143858976|MainThread] 📋 Memory Validation: Memory check passed: ~0.1GB required, 489.4GB available
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] 📊 BASELINE MEASUREMENTS
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] 💾 System Memory: 25.78M
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] 🔍 Search Memory: 20.06MiB
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] 📈 Baseline: 26,401 KB
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] 🎯 ESTIMATED USAGE
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] 📁 Data Memory:      34 MB
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] 🏷️  Tag Index:       16.0 MB
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] 🎯 Vector Index:     3 MB
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] 💰 Total (overhead): 69 MB
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] ⚡ DATA INSERTION PHASE
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] 📝 Generating: 100,000 keys
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] 🚀 Mode: ASYNC I/O with 50 concurrent tasks
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] 📦 Batch size: 2,000
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] 🚀 Starting ASYNC data ingestion
+2025-07-23 22:13:13 - INFO - [Thread-278961143858976|MainThread] 🚀 Using ASYNC I/O: 50 concurrent tasks sharing 5 clients
+2025-07-23 22:13:16 - INFO - 🔄 [comprehensive] Time: 47s | Memory: 36,172 KB (+-134,256) | Keys: 24,184 (+-75,816) | Phase: Async Insertion | Progress: 100,000/100,000 (100.0%) | Speed: 16548 keys/sec | Tasks: 50 async | ETA: 0s
+2025-07-23 22:13:17 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::used_memory_human=34.68M
+2025-07-23 22:13:17 - INFO - [Thread-278958272737664|Thread-1 (_monitor)] monitoring::search_used_memory_human=20.06MiB
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] ✅ INSERTION COMPLETE
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] 📊 Keys Inserted: 100,000
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] ⏱️  Time Taken: 4.9s
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] 🚀 Speed: 20204 keys/sec
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] 💾 System Memory: 61.15M
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] 🔍 Search Memory: 20.06MiB
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] 📈 DATA DISTRIBUTION STATS
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] 🏷️  Tag Lengths: min=10, max=30, avg=20.1, p95=29
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] 📝 Tags/Key: min=3, max=8, avg=5.5, p95=8
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] 🔄 Tag Reuse: 20000 unique tags, avg keys/tag=27.5, max=45
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] 🏗️  INDEX CREATION PHASE
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] ──────────────────────────────────────────────────
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] 📊 Data Memory (no index): 36,219 KB
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] 🏷️  Index Name: idx_groupbased_100
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] 
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread]     Starting search index creation for 100,000 documents...
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] Index is still processing::used_memory_human=61.35M
+2025-07-23 22:13:18 - INFO - [Thread-278961143858976|MainThread] Index is still processing::search_used_memory_human=20.22MiB
