@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from collections import Counter, defaultdict
 import json
+import numpy as np
 
 try:
     import psutil
@@ -426,6 +427,16 @@ class BenchmarkScenario:
     total_keys: int
     tags_config: TagsConfig
     description: str
+    # Vector configuration
+    vector_dim: int = 8
+    vector_algorithm: VectorAlgorithm = VectorAlgorithm.FLAT
+    vector_metric: VectorMetric = VectorMetric.COSINE
+    # Numeric configuration  
+    include_numeric: bool = True
+    numeric_fields: Dict[str, Tuple[float, float]] = field(default_factory=lambda: {
+        "score": (0.0, 100.0),
+        "timestamp": (1000000000.0, 2000000000.0)
+    })
 
 
 
@@ -1015,7 +1026,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         logging.info(f"Starting {test_name} - Log file: {log_filename}")
         return log_filename
     
-    def calculate_comprehensive_memory(self, total_keys, unique_tags, avg_tag_length, avg_tags_per_key, avg_keys_per_tag, vector_dims=8, hnsw_m=16, monitor=None):
+    def calculate_comprehensive_memory(self, total_keys, unique_tags, avg_tag_length, avg_tags_per_key, avg_keys_per_tag, vector_dims=8, hnsw_m=16, include_numeric=True, monitor=None):
         """
         Calculate comprehensive search module memory including all major components.
         
@@ -1052,17 +1063,25 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         # === 1. VALKEY CORE OVERHEAD ===
         # Valkey stores HASH keys with internal overhead
         # Each key: hash table entry + key string + metadata
-        avg_key_length = 32  # estimate based on typical patterns
+        avg_key_length = 8  # estimate based on typical patterns
         valkey_key_overhead = total_keys * (
             32 +  # hash table entry overhead
             avg_key_length + 8 +  # key string + length
             16  # misc metadata per key
         )
         
-        # Hash field storage (tags + vector fields per key)
+        # Hash field storage (tags + vector + numeric fields per key)
+        numeric_fields_size = 0
+        if include_numeric:
+            # Assume 2 numeric fields by default (score and timestamp), 8 bytes each as doubles
+            # In real usage, this should be passed as a parameter
+            numeric_fields_count = 2
+            numeric_fields_size = numeric_fields_count * 8 * 1.1  # with overhead
+        
         valkey_fields_overhead = total_keys * (
             (avg_tags_per_key * avg_tag_length * 1.2) +  # tag data with overhead
             (vector_dims * 4 * 1.1) +  # vector data with overhead
+            numeric_fields_size +  # numeric fields with overhead
             32  # field metadata
         )
         
@@ -1071,7 +1090,8 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         if monitor:
             monitor.log("🗄️  VALKEY CORE CALCULATION:")
             monitor.log(f"   Key overhead: {total_keys:,} × (32 + {avg_key_length} + 8 + 16) = {valkey_key_overhead:,.0f} bytes")
-            monitor.log(f"   Field storage: {total_keys:,} × ({avg_tags_per_key:.1f} × {avg_tag_length:.1f} × 1.2 + {vector_dims} × 4 × 1.1 + 32) = {valkey_fields_overhead:,.0f} bytes")
+            numeric_info = f" + {numeric_fields_size:.0f}" if include_numeric else ""
+            monitor.log(f"   Field storage: {total_keys:,} × ({avg_tags_per_key:.1f} × {avg_tag_length:.1f} × 1.2 + {vector_dims} × 4 × 1.1{numeric_info} + 32) = {valkey_fields_overhead:,.0f} bytes")
             monitor.log(f"   Valkey total: {valkey_memory:,.0f} bytes = {valkey_memory / 1024:.0f} KB")
             monitor.log("")
         
@@ -1118,8 +1138,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         tag_index_memory = (
             tag_interning_memory + 
             tracked_keys_memory + 
-            patricia_tree_memory + 
-            untracked_keys_memory
+            patricia_tree_memory
         )
         
         if monitor:
@@ -1128,7 +1147,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log(f"   Key interning: {total_keys:,} × ({avg_key_length} + 32) + {total_keys:,} × 48 = {key_interning_memory:,.0f} bytes")
             monitor.log(f"   Tracked keys: {total_keys:,} × (8 + {taginfo_per_key:.0f} + 16) = {tracked_keys_memory:,.0f} bytes")
             monitor.log(f"   Patricia tree: {estimated_tree_nodes:,} nodes × 72 + {unique_tags:,} tags × (32 + {avg_keys_per_tag:.1f} × 8) = {patricia_tree_memory:,.0f} bytes")
-            monitor.log(f"   Untracked keys: {total_keys:,} × 0.1 × 24 = {untracked_keys_memory:,.0f} bytes")
+            # monitor.log(f"   Untracked keys: {total_keys:,} × 0.1 × 24 = {untracked_keys_memory:,.0f} bytes")
             monitor.log(f"   Tag index total: {tag_index_memory:,.0f} bytes = {tag_index_memory / 1024:.0f} KB")
             monitor.log("")
         
@@ -1209,9 +1228,26 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         search_module_overhead = module_base_overhead + index_schema_overhead + coordination_overhead
         
-        # === 5. MEMORY FRAGMENTATION & ALIGNMENT ===
+        # === 5. NUMERIC INDEX MEMORY (if enabled) ===
+        numeric_index_memory = 0
+        if include_numeric:
+            # Numeric range tree structures for fields
+            # Each numeric index uses a sorted tree structure
+            numeric_index_memory = total_keys * numeric_fields_count * (
+                24 +  # tree node overhead
+                8 +   # numeric value storage
+                8     # pointer to document
+            )
+        
+        if monitor and include_numeric:
+            monitor.log("🔢 NUMERIC INDEX CALCULATION:")
+            monitor.log(f"   Numeric index nodes: {total_keys * numeric_fields_count:,} × 40 bytes = {numeric_index_memory:,.0f} bytes")
+            monitor.log(f"   Numeric index total: {numeric_index_memory:,.0f} bytes = {numeric_index_memory // 1024:.0f} KB")
+            monitor.log("")
+        
+        # === 6. MEMORY FRAGMENTATION & ALIGNMENT ===
         # Real allocators have significant overhead
-        total_allocated = valkey_memory + tag_index_memory + vector_index_memory + search_module_overhead
+        total_allocated = valkey_memory + tag_index_memory + vector_index_memory + numeric_index_memory + search_module_overhead
         fragmentation_factor = 1.25  # 25% overhead typical for mixed allocation patterns
         fragmentation_overhead = total_allocated * (fragmentation_factor - 1.0)
         
@@ -1220,7 +1256,8 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             'valkey_core_kb': int(valkey_memory // 1024),
             'key_interning_kb': int(key_interning_memory // 1024),
             'tag_index_kb': int(tag_index_memory // 1024),
-            'vector_index_kb': int(vector_index_memory // 1024), 
+            'vector_index_kb': int(vector_index_memory // 1024),
+            'numeric_index_kb': int(numeric_index_memory // 1024),
             'search_module_overhead_kb': int(search_module_overhead // 1024),
             'fragmentation_overhead_kb': int(fragmentation_overhead // 1024),
             'total_estimated_kb': int((total_allocated + fragmentation_overhead) // 1024),
@@ -1245,6 +1282,8 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log(f"     - HNSW Level 0:        {breakdown['hnsw_level0_kb']:,} KB")
             monitor.log(f"     - HNSW Higher:         {breakdown['hnsw_higher_levels_kb']:,} KB")
             monitor.log(f"     - Mappings:            {breakdown['vector_mappings_kb']:,} KB")
+            if include_numeric:
+                monitor.log(f"   • Numeric Index:         {breakdown['numeric_index_kb']:,} KB")
             monitor.log(f"   • Module Overhead:       {breakdown['search_module_overhead_kb']:,} KB")
             monitor.log(f"   • Fragmentation:         {breakdown['fragmentation_overhead_kb']:,} KB")
             monitor.log(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -1440,6 +1479,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         sum_key_lengths = 0
         sum_tag_lengths = 0
         sum_vector_lengths = 0
+        vector_dims = None  # Will detect from first vector
+        numeric_fields_count = 0
+        numeric_field_names = set()
         
         # Use SCAN to iterate through all keys with the prefix
         cursor = 0
@@ -1492,8 +1534,22 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                             vector_value = fields[vector_key]
                             if isinstance(vector_value, bytes):
                                 sum_vector_lengths += len(vector_value)
+                                # Detect vector dimensions from first vector (float32 = 4 bytes per dim)
+                                if vector_dims is None:
+                                    vector_dims = len(vector_value) // 4
                             else:
                                 sum_vector_lengths += len(str(vector_value))
+                        
+                        # Check for numeric fields (score, timestamp, etc)
+                        for field_name, field_value in fields.items():
+                            field_name_str = field_name.decode('utf-8') if isinstance(field_name, bytes) else field_name
+                            if field_name_str not in ['tags', 'vector']:
+                                # Try to convert to float to check if it's numeric
+                                try:
+                                    float(field_value)
+                                    numeric_field_names.add(field_name_str)
+                                except (ValueError, TypeError):
+                                    pass
                 
                 # Update progress periodically
                 if monitor and batch_count % 10 == 0:
@@ -1505,6 +1561,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         # Calculate totals
         total_data_size = sum_key_lengths + sum_tag_lengths + sum_vector_lengths
+        numeric_fields_count = len(numeric_field_names)
         
         # Log results
         if monitor:
@@ -1514,6 +1571,10 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log(f"🔑 Sum of key lengths: {sum_key_lengths:,} bytes ({sum_key_lengths / (1024**2):.2f} MB)")
             monitor.log(f"🏷️  Sum of tag lengths: {sum_tag_lengths:,} bytes ({sum_tag_lengths / (1024**2):.2f} MB)")
             monitor.log(f"📐 Sum of vector lengths: {sum_vector_lengths:,} bytes ({sum_vector_lengths / (1024**2):.2f} MB)")
+            if vector_dims:
+                monitor.log(f"   Vector dimensions detected: {vector_dims}")
+            if numeric_fields_count > 0:
+                monitor.log(f"🔢 Numeric fields detected: {numeric_fields_count} ({', '.join(sorted(numeric_field_names))})")
             monitor.log(f"💾 Total data size: {total_data_size:,} bytes ({total_data_size / (1024**2):.2f} MB)")
             monitor.log("")
             
@@ -1531,7 +1592,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             'sum_key_lengths': sum_key_lengths,
             'sum_tag_lengths': sum_tag_lengths,
             'sum_vector_lengths': sum_vector_lengths,
-            'total_data_size': total_data_size
+            'total_data_size': total_data_size,
+            'vector_dims': vector_dims if vector_dims else 8,  # Default to 8 if not detected
+            'numeric_fields_count': numeric_fields_count
         }
     
     def export_dataset_to_csv(self, client: Valkey, prefix: str = "key:", scenario_name: str = "", timestamp: str = "", monitor: ProgressMonitor = None) -> tuple[str, str]:
@@ -1690,23 +1753,38 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         return hashes_csv, tags_csv
     
-    def create_schema(self, index_name: str, vector_dim: int = 8) -> IndexSchema:
-        """Create a minimal schema with tags and small vector"""
+    def create_schema(self, index_name: str, vector_dim: int = 8, include_numeric: bool = True, 
+                     vector_algorithm: VectorAlgorithm = VectorAlgorithm.FLAT,
+                     vector_metric: VectorMetric = VectorMetric.COSINE,
+                     numeric_fields: Dict[str, Tuple[float, float]] = None) -> IndexSchema:
+        """Create a schema with tags, vector, and optionally numeric fields"""
+        from hash_generator import create_numeric_field
+        
+        fields = [
+            FieldSchema(name="tags", type=FieldType.TAG, separator=","),
+            FieldSchema(
+                name="vector",
+                type=FieldType.VECTOR,
+                vector_config=VectorFieldSchema(
+                    algorithm=vector_algorithm,
+                    dim=vector_dim,
+                    distance_metric=vector_metric
+                )
+            )
+        ]
+        
+        if include_numeric and numeric_fields:
+            # Add numeric fields based on configuration
+            for field_name, (min_val, max_val) in numeric_fields.items():
+                distribution = "normal" if "score" in field_name else "uniform"
+                fields.append(
+                    create_numeric_field(field_name, min_val=min_val, max_val=max_val, distribution=distribution)
+                )
+        
         return IndexSchema(
             index_name=index_name,
             prefix=["key:"],
-            fields=[
-                FieldSchema(name="tags", type=FieldType.TAG, separator=","),
-                FieldSchema(
-                    name="vector",
-                    type=FieldType.VECTOR,
-                    vector_config=VectorFieldSchema(
-                        algorithm=VectorAlgorithm.FLAT,
-                        dim=vector_dim,
-                        distance_metric=VectorMetric.COSINE
-                    )
-                )
-            ]
+            fields=fields
         )
     
     def verify_server_connection(self, client: Valkey, monitor: ProgressMonitor = None) -> bool:
@@ -1906,7 +1984,16 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             
             # Create schema and generator
             index_name = f"idx_{scenario.name.lower().replace(' ', '_')}"
-            schema = self.create_schema(index_name)
+            
+            # Use scenario configuration for vector and numeric fields
+            schema = self.create_schema(
+                index_name, 
+                vector_dim=scenario.vector_dim,
+                vector_algorithm=scenario.vector_algorithm,
+                vector_metric=scenario.vector_metric,
+                include_numeric=scenario.include_numeric,
+                numeric_fields=scenario.numeric_fields
+            )
             
             config = HashGeneratorConfig(
                 num_keys=scenario.total_keys,
@@ -2096,7 +2183,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 monitor.log("")
             
             # Measure memory after data insertion
-            data_memory = client.execute_command("info", "memory")['used_memory_dataset']
+            data_memory = client.execute_command("info", "memory")['used_memory']
             data_memory_kb = data_memory // 1024
 
             monitor.log("🏗️  INDEX CREATION PHASE")
@@ -2125,8 +2212,13 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             # Get distribution statistics first
             dist_stats = dist_collector.get_summary()
             
+            # Get actual vector dimensions from data verification
+            prefix = schema.prefix[0] if schema.prefix else "key:"  # Get prefix from schema
+            verify_result = self.verify_memory(client, prefix, monitor)
+            vector_dims = verify_result.get('vector_dims', scenario.vector_dim)  # Use scenario config as fallback
+            
             # Calculate metrics with improved tag index memory estimation
-            vector_memory_kb = (scenario.total_keys * 8 * 4) // 1024  # 8 dim * 4 bytes
+            vector_memory_kb = (scenario.total_keys * vector_dims * 4) // 1024  # dims * 4 bytes
             
             # Use comprehensive memory estimation based on all C++ structures
             memory_breakdown = self.calculate_comprehensive_memory(
@@ -2135,7 +2227,8 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 dist_stats['tag_lengths']['mean'],
                 dist_stats['tags_per_key']['mean'],
                 dist_stats['tag_usage']['mean_keys_per_tag'],
-                vector_dims=8,
+                vector_dims=vector_dims,  # Use detected dimensions
+                include_numeric=scenario.include_numeric,
                 monitor=monitor
             )
             
@@ -2172,10 +2265,14 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 'estimated_tag_memory_kb': estimated_tag_memory_kb,
                 'estimated_total_memory_kb': estimated_total_kb,
                 'estimated_vector_memory_kb': estimated_vector_memory_kb,
+                'estimated_numeric_memory_kb': memory_breakdown['numeric_index_kb'],
                 'search_used_memory_kb': search_memory_kb,  # Add missing field for fuzzy test
                 'tag_memory_accuracy': (estimated_tag_memory_kb / max(1, actual_tag_memory_kb)) if actual_tag_memory_kb > 0 else 0,
                 'total_memory_accuracy': (estimated_total_kb / max(1, search_memory_kb)) if search_memory_kb > 0 else 0,
                 'vector_memory_kb': vector_memory_kb,
+                'vector_dims': vector_dims,
+                'numeric_memory_kb': memory_breakdown['numeric_index_kb'],
+                'numeric_fields_count': verify_result.get('numeric_fields_count', 0),
                 'insertion_time': insertion_time,
                 'insertion_time_sec': insertion_time,  # Add for fuzzy test compatibility
                 'keys_per_second': total_keys_inserted/insertion_time if insertion_time > 0 else 0,  # Add for fuzzy test
@@ -2429,6 +2526,24 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 description=f"{dist.value} distribution of tags per key"
             ))
         
+        # 10. Vector dimension scenarios (test vector memory scaling)
+        for vector_dims in [64, 256, 512]:
+            scenarios.append(BenchmarkScenario(
+                name=f"Vector{vector_dims}_Comprehensive",
+                total_keys=base_keys // 3,  # Smaller keys for larger vectors
+                tags_config=TagsConfig(
+                    num_keys=base_keys // 3,
+                    tags_per_key=TagDistribution(avg=3, min=1, max=5),
+                    tag_length=LengthConfig(avg=30, min=20, max=50),
+                    sharing=TagSharingConfig(
+                        mode=TagSharingMode.SHARED_POOL,
+                        pool_size=2000,
+                        reuse_probability=0.6
+                    )
+                ),
+                description=f"{vector_dims}-dimensional vectors with tags and numeric fields"
+            ))
+        
         return scenarios
     
     def test_comprehensive_memory_benchmark(self, use_async: bool = True):
@@ -2494,8 +2609,8 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         monitor.log("┃" + " " * 35 + "📊 COMPREHENSIVE BENCHMARK RESULTS" + " " * 48 + "┃")
         monitor.log("┗" + "━" * 118 + "┛")
         monitor.log("")
-        
-        monitor.log(f"{'Scenario':<30} {'Keys':>8} {'DataKB':>10} {'TagIdxKB':>10} {'TotalKB':>10} {'Time(s)':>8} {'Mode':<15}")
+
+        monitor.log(f"{'Scenario':<30} {'Keys':>8} {'NoIndexMemoryKB':>10} {'WithIndexMemoryKB':>10} {'IndexKB':>10} {'TagIdxKB':>10} {'SearchKB':>10} {'Mode':<15}")
         monitor.log("─" * 120)
         
         for r in results:
@@ -2505,15 +2620,16 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                             f"{'SKIPPED':>10} "
                             f"{'':>10} "
                             f"{'':>10} "
-                            f"{'':>8} "
+                            f"{'':>10} "
                             f"Memory limit exceeded")
             else:
                 monitor.log(f"{r['scenario_name']:<30} "
                             f"{r['total_keys']:>8,} "
                             f"{r['data_memory_kb']:>10,} "
-                            f"{r['tag_index_memory_kb']:>10,} "
                             f"{r['total_memory_kb']:>10,} "
-                            f"{r['insertion_time']:>8.1f} "
+                            f"{r['index_overhead_kb']:>10,} "
+                            f"{r['tag_index_memory_kb']:>10,} "
+                            f"{r['search_used_memory_kb']:>10,} "
                             f"{r['tags_config']:<15}")
         
         # Analyze results by category
@@ -2583,7 +2699,11 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                     tag_length=LengthConfig(avg=100, min=100, max=100),
                     sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
                 ),
-                description="1 unique tag per key, tag length 100 bytes, 10K keys"
+                description="1 unique tag per key, tag length 100 bytes, 10K keys + 8-dim vectors + 2 numeric fields",
+                vector_dim=8,
+                vector_algorithm=VectorAlgorithm.FLAT,
+                vector_metric=VectorMetric.COSINE,
+                include_numeric=True
             ),
             BenchmarkScenario(
                 name="Quick_SingleUniqueTag100Keys100K",
@@ -2594,7 +2714,11 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                     tag_length=LengthConfig(avg=100, min=100, max=100),
                     sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
                 ),
-                description="1 unique tag per key, tag length 100 bytes, 100K keys"
+                description="1 unique tag per key, tag length 100 bytes, 100K keys + 16-dim vectors + 2 numeric fields",
+                vector_dim=16,
+                vector_algorithm=VectorAlgorithm.FLAT,
+                vector_metric=VectorMetric.COSINE,
+                include_numeric=True
             ),
             BenchmarkScenario(
                 name="Quick_SingleUniqueTag1000Keys10K",
@@ -2605,10 +2729,14 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                     tag_length=LengthConfig(avg=1000, min=1000, max=1000),
                     sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
                 ),
-                description="1 unique tag per key, tag length 1000 bytes, 10K keys"
+                description="1 unique tag per key, tag length 1000 bytes, 10K keys + 32-dim vectors + 2 numeric fields",
+                vector_dim=32,
+                vector_algorithm=VectorAlgorithm.FLAT,
+                vector_metric=VectorMetric.L2,
+                include_numeric=True
             ),
             BenchmarkScenario(
-                name="Quick_SingleUniqueTag1000Keys10K",
+                name="Quick_SingleUniqueTag1000Keys100K",
                 total_keys=100000,
                 tags_config=TagsConfig(
                     num_keys=100000,
@@ -2616,7 +2744,11 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                     tag_length=LengthConfig(avg=1000, min=1000, max=1000),
                     sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
                 ),
-                description="1 unique tag per key, tag length 1000 bytes, 100K keys"
+                description="1 unique tag per key, tag length 1000 bytes, 100K keys + 64-dim vectors + 2 numeric fields",
+                vector_dim=64,
+                vector_algorithm=VectorAlgorithm.HNSW,
+                vector_metric=VectorMetric.COSINE,
+                include_numeric=True
             ),
             
             # Tag Sharing Scenarios - Test non-linear effects of keys_per_tag
@@ -2632,7 +2764,11 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                         pool_size=5000  # 10 keys per tag
                     )
                 ),
-                description="Tag sharing: 10 keys per tag, 50K keys, 5K unique tags"
+                description="Tag sharing: 10 keys per tag, 50K keys, 5K unique tags + 128-dim vectors + 2 numeric fields",
+                vector_dim=128,
+                vector_algorithm=VectorAlgorithm.FLAT,
+                vector_metric=VectorMetric.IP,
+                include_numeric=True
             ),
             BenchmarkScenario(
                 name="Quick_TagShare_Medium", 
@@ -2646,7 +2782,11 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                         pool_size=500  # 100 keys per tag
                     )
                 ),
-                description="Tag sharing: 100 keys per tag, 50K keys, 500 unique tags"
+                description="Tag sharing: 100 keys per tag, 50K keys, 500 unique tags + 256-dim vectors + 2 numeric fields",
+                vector_dim=256,
+                vector_algorithm=VectorAlgorithm.HNSW,
+                vector_metric=VectorMetric.COSINE,
+                include_numeric=True
             ),
             BenchmarkScenario(
                 name="Quick_TagShare_High",
@@ -2660,7 +2800,12 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                         pool_size=50  # 1000 keys per tag
                     )
                 ),
-                description="Tag sharing: 1000 keys per tag, 50K keys, 50 unique tags"
+                description="Tag sharing: 1000 keys per tag, 50K keys, 50 unique tags + 512-dim vectors + 2 numeric fields",
+                vector_dim=512,
+                vector_algorithm=VectorAlgorithm.HNSW,
+                vector_metric=VectorMetric.L2,
+                include_numeric=True,
+                numeric_fields={"score": (0.0, 100.0), "timestamp": (1000000000.0, 2000000000.0), "priority": (1.0, 10.0)}
             ),
             
             # Prefix Sharing Scenarios - Test Patricia tree efficiency
@@ -2680,7 +2825,11 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                     ),
                     sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
                 ),
-                description="Prefix sharing: 25% common prefix, 30K keys, unique tags with shared prefixes"
+                description="Prefix sharing: 25% common prefix, 30K keys, unique tags + 768-dim vectors + 2 numeric fields",
+                vector_dim=768,
+                vector_algorithm=VectorAlgorithm.HNSW,
+                vector_metric=VectorMetric.COSINE,
+                include_numeric=True
             ),
             BenchmarkScenario(
                 name="Quick_PrefixShare_75pct",
@@ -2698,7 +2847,12 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                     ),
                     sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
                 ),
-                description="Prefix sharing: 75% common prefix, 30K keys, unique tags with shared prefixes"
+                description="Prefix sharing: 75% common prefix, 30K keys, unique tags + 1024-dim vectors + 3 numeric fields",
+                vector_dim=1024,
+                vector_algorithm=VectorAlgorithm.HNSW,
+                vector_metric=VectorMetric.IP,
+                include_numeric=True,
+                numeric_fields={"score": (0.0, 100.0), "timestamp": (1000000000.0, 2000000000.0), "rating": (1.0, 5.0)}
             ),
             
             # Mixed Scenario - Combined effects
@@ -2721,19 +2875,50 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                         pool_size=100  # High sharing: 400 keys per tag
                     )
                 ),
-                description="Mixed: High tag sharing + 75% prefix overlap, 40K keys, 100 unique tags"
+                description="Mixed: High tag sharing + 75% prefix overlap, 40K keys + 384-dim vectors + 4 numeric fields",
+                vector_dim=384,
+                vector_algorithm=VectorAlgorithm.HNSW,
+                vector_metric=VectorMetric.COSINE,
+                include_numeric=True,
+                numeric_fields={
+                    "score": (0.0, 100.0),
+                    "timestamp": (1000000000.0, 2000000000.0),
+                    "priority": (1.0, 10.0),
+                    "confidence": (0.0, 1.0)
+                }
             ),
             
             # BenchmarkScenario(
-            #     name="Quick_Unique",
-            #     total_keys=10000,
+            #     name="10M_Unique",
+            #     total_keys=1000000,
             #     tags_config=TagsConfig(
-            #         num_keys=10000,
-            #         tags_per_key=TagDistribution(avg=5, min=3, max=8),
-            #         tag_length=LengthConfig(avg=20, min=10, max=30),
+            #         num_keys=1000000,
+            #         tags_per_key=TagDistribution(avg=2, min=1, max=5000),
+            #         tag_length=LengthConfig(avg=64, min=2, max=3000),
             #         sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
             #     ),
-            #     description="Unique tags baseline (5 tags/key)"
+            #     description="Unique tags 10M keys (2 tags/key, 64 bytes/tag) average, no sharing"
+            # ),
+            # BenchmarkScenario(
+            #     name="10M_Quick_Mixed_HighShare_HighPrefix",
+            #     total_keys=10000000,
+            #     tags_config=TagsConfig(
+            #         num_keys=10000000,
+            #         tags_per_key=TagDistribution(avg=5, min=1, max=1000),
+            #         tag_length=LengthConfig(avg=64, min=1, max=10000),
+            #         tag_prefix=PrefixConfig(
+            #             enabled=True,
+            #             min_shared=1,  # 75% prefix sharing
+            #             max_shared=900,
+            #             share_probability=0.95,  # Very high prefix reuse
+            #             prefix_pool_size=100  # 100 different prefixes
+            #         ),
+            #         sharing=TagSharingConfig(
+            #             mode=TagSharingMode.SHARED_POOL,
+            #             pool_size=100  # High sharing: 400 keys per tag
+            #         )
+            #     ),
+            #     description="Mixed: High tag sharing + 75% prefix overlap, 40K keys, 100 unique tags"
             # ),
             # BenchmarkScenario(
             #     name="Quick_SharedPool",
@@ -2809,33 +2994,35 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         monitor.log("┗" + "━" * 118 + "┛")
         monitor.log("")
         
-        monitor.log(f"{'Scenario':<30} {'Keys':>8} {'DataKB':>10} {'TagIdxKB':>10} {'TotalKB':>10} {'Time(s)':>8} {'Mode':<15}")
+        monitor.log(f"{'Scenario':<35} {'Keys':>8} {'WoIndexKB':>10} {'wIndexKB':>10} {'IndexKB':>10} {'TagIdxKB':>10} {'SearchKB':>10} {'Mode':<15}")
         monitor.log("─" * 120)
         
         for r in results:
             if r.get('skipped'):
-                monitor.log(f"{r['scenario_name']:<30} "
+                monitor.log(f"{r['scenario_name']:<35} "
                             f"{r['total_keys']:>8,} "
                             f"{'SKIPPED':>10} "
                             f"{'':>10} "
                             f"{'':>10} "
-                            f"{'':>8} "
+                            f"{'':>10} "
+                            f"{'':>10} "
                             f"Memory limit exceeded")
             else:
-                monitor.log(f"{r['scenario_name']:<30} "
+                monitor.log(f"{r['scenario_name']:<35} "
                             f"{r['total_keys']:>8,} "
                             f"{r['data_memory_kb']:>10,} "
-                            f"{r['tag_index_memory_kb']:>10,} "
                             f"{r['total_memory_kb']:>10,} "
-                            f"{r['insertion_time']:>8.1f} "
+                            f"{r['index_overhead_kb']:>10,} "
+                            f"{r['tag_index_memory_kb']:>10,} "
+                            f"{r['search_used_memory_kb']:>10,} "
                             f"{r['tags_config']:<15}")
         
-        # Analyze results by category
-        monitor.log("")
-        monitor.log("┏" + "━" * 78 + "┓")
-        monitor.log("┃" + " " * 32 + "🔍 KEY FINDINGS" + " " * 31 + "┃")
-        monitor.log("┗" + "━" * 78 + "┛")
-        monitor.log("")
+        # # Analyze results by category
+        # monitor.log("")
+        # monitor.log("┏" + "━" * 78 + "┓")
+        # monitor.log("┃" + " " * 32 + "🔍 KEY FINDINGS" + " " * 31 + "┃")
+        # monitor.log("┗" + "━" * 78 + "┛")
+        # monitor.log("")
         # Stop the main monitor
         monitor.stop()
     
@@ -3251,20 +3438,25 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 
                 # Get memory estimation BEFORE running the test
                 estimated_stats = self._calculate_estimated_stats(scenario)
+                # Use default schema for fuzzy tests (8-dim vectors, 2 numeric fields)
+                vector_dims = 8
+                
                 estimated_memory = self.calculate_comprehensive_memory(
                     total_keys=scenario.total_keys,
                     unique_tags=estimated_stats['unique_tags'],
                     avg_tag_length=estimated_stats['avg_tag_length'],
                     avg_tags_per_key=estimated_stats['avg_tags_per_key'],
                     avg_keys_per_tag=estimated_stats['avg_keys_per_tag'],
-                    vector_dims=8,
+                    vector_dims=vector_dims,  # Use actual schema dimensions
                     hnsw_m=16,
+                    include_numeric=True,
                     monitor=monitor
                 )
                 
                 monitor.log(f"  📊 Estimated total memory: {estimated_memory['total_estimated_kb']:,} KB")
                 monitor.log(f"     • Tag index: {estimated_memory['tag_index_kb']:,} KB")
                 monitor.log(f"     • Vector index: {estimated_memory['vector_index_kb']:,} KB")
+                monitor.log(f"     • Numeric index: {estimated_memory['numeric_index_kb']:,} KB")
                 
                 # Run the actual benchmark
                 monitor.log(f"  🚀 Running actual benchmark...")
@@ -3311,6 +3503,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                     'estimated_memory_kb': estimated_memory['total_estimated_kb'],
                     'estimated_tag_index_kb': estimated_memory['tag_index_kb'],
                     'estimated_vector_index_kb': estimated_memory['vector_index_kb'],
+                    'estimated_numeric_index_kb': estimated_memory['numeric_index_kb'],
                     'actual_memory_kb': actual_memory_kb,
                     'accuracy_ratio': accuracy_ratio,
                     'insertion_time_sec': benchmark_result.get('insertion_time_sec', 0),
@@ -3381,7 +3574,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         fieldnames = [
             'scenario_name', 'description', 'total_keys', 'skipped', 'reason',
-            'estimated_memory_kb', 'estimated_tag_index_kb', 'estimated_vector_index_kb',
+            'estimated_memory_kb', 'estimated_tag_index_kb', 'estimated_vector_index_kb', 'estimated_numeric_index_kb',
             'actual_memory_kb', 'accuracy_ratio', 'insertion_time_sec', 'keys_per_second',
             'unique_tags', 'avg_tags_per_key', 'avg_tag_length'
         ]
@@ -3456,4 +3649,204 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         else:
             monitor.log("⚠️ NEEDS IMPROVEMENT: Memory estimation accuracy should be enhanced")
         
+        monitor.log("")
+    
+    def test_hnsw_vector_configuration(self):
+        """Test HNSW vector field configuration"""
+        monitor = self.progress_monitor
+        monitor.log("\n🧪 Testing HNSW Vector Configuration")
+        monitor.log("=" * 60)
+        
+        # Create schema with HNSW vector
+        from hash_generator import create_hnsw_vector_field
+        
+        schema = IndexSchema(
+            index_name="test_hnsw",
+            prefix=["doc:"],
+            fields=[
+                FieldSchema(name="tags", type=FieldType.TAG),
+                create_hnsw_vector_field(
+                    name="embedding",
+                    dim=128,
+                    metric=VectorMetric.COSINE,
+                    m=32,
+                    ef_construction=400,
+                    ef_runtime=100,
+                    epsilon=0.01
+                )
+            ]
+        )
+        
+        # Generate data
+        config = HashGeneratorConfig(
+            num_keys=100,
+            schema=schema,
+            vector_normalize=True,  # Important for cosine similarity
+            batch_size=100
+        )
+        gen = HashKeyGenerator(config)
+        
+        # Verify FT.CREATE command
+        create_cmd = gen.generate_ft_create_command()
+        monitor.log(f"FT.CREATE command generated:")
+        monitor.log(f"  {create_cmd}")
+        
+        # Verify command includes HNSW parameters
+        assert "HNSW" in create_cmd, "Missing HNSW algorithm"
+        assert "M 32" in create_cmd, "Missing M parameter"
+        assert "EF_CONSTRUCTION 400" in create_cmd, "Missing EF_CONSTRUCTION"
+        assert "EF_RUNTIME 100" in create_cmd, "Missing EF_RUNTIME"
+        assert "EPSILON 0.01" in create_cmd, "Missing EPSILON"
+        
+        # Generate and verify vectors
+        vectors_checked = 0
+        for batch in gen:
+            for key, fields in batch[:5]:  # Check first 5
+                vec = np.frombuffer(fields['embedding'], dtype=np.float32)
+                norm = np.linalg.norm(vec)
+                # Verify normalization for cosine similarity
+                assert abs(norm - 1.0) < 0.001, f"Vector not normalized: norm={norm}"
+                vectors_checked += 1
+            break
+        
+        monitor.log(f"✅ Verified {vectors_checked} normalized vectors for COSINE similarity")
+        monitor.log("")
+    
+    def test_numeric_field_distributions(self):
+        """Test numeric field generation with different distributions"""
+        monitor = self.progress_monitor
+        monitor.log("\n🧪 Testing Numeric Field Distributions")
+        monitor.log("=" * 60)
+        
+        from hash_generator import create_numeric_field
+        
+        # Create schema with multiple numeric fields
+        schema = IndexSchema(
+            index_name="test_numeric",
+            prefix=["item:"],
+            fields=[
+                create_numeric_field("price", min_val=0.99, max_val=999.99, distribution="uniform"),
+                create_numeric_field("rating", min_val=1, max_val=5, distribution="normal"),
+                create_numeric_field("views", min_val=0, max_val=1000000, distribution="exponential"),
+                FieldSchema(name="tags", type=FieldType.TAG),
+                FieldSchema(
+                    name="vec",
+                    type=FieldType.VECTOR,
+                    vector_config=VectorFieldSchema(dim=8)
+                )
+            ]
+        )
+        
+        # Generate data
+        config = HashGeneratorConfig(
+            num_keys=1000,
+            schema=schema,
+            batch_size=1000
+        )
+        gen = HashKeyGenerator(config)
+        
+        # Collect numeric values
+        prices = []
+        ratings = []
+        views = []
+        
+        for batch in gen:
+            for key, fields in batch:
+                prices.append(fields['price'])
+                ratings.append(fields['rating'])
+                views.append(fields['views'])
+        
+        # Analyze distributions
+        monitor.log("📊 Distribution Analysis:")
+        
+        # Uniform distribution (price)
+        price_mean = np.mean(prices)
+        price_std = np.std(prices)
+        price_expected_mean = (0.99 + 999.99) / 2
+        price_expected_std = (999.99 - 0.99) / np.sqrt(12)  # Uniform distribution std
+        
+        monitor.log(f"\nPrice (uniform):")
+        monitor.log(f"  Range: {min(prices):.2f} - {max(prices):.2f}")
+        monitor.log(f"  Mean: {price_mean:.2f} (expected: {price_expected_mean:.2f})")
+        monitor.log(f"  Std: {price_std:.2f} (expected: {price_expected_std:.2f})")
+        
+        # Normal distribution (rating)
+        rating_mean = np.mean(ratings)
+        rating_std = np.std(ratings)
+        rating_expected_mean = (1 + 5) / 2
+        
+        monitor.log(f"\nRating (normal):")
+        monitor.log(f"  Range: {min(ratings):.2f} - {max(ratings):.2f}")
+        monitor.log(f"  Mean: {rating_mean:.2f} (expected: ~{rating_expected_mean:.2f})")
+        monitor.log(f"  Std: {rating_std:.2f}")
+        monitor.log(f"  Within [1, 5]: {sum(1 <= r <= 5 for r in ratings)}/{len(ratings)}")
+        
+        # Exponential distribution (views)
+        views_mean = np.mean(views)
+        views_median = np.median(views)
+        
+        monitor.log(f"\nViews (exponential):")
+        monitor.log(f"  Range: {min(views):.0f} - {max(views):.0f}")
+        monitor.log(f"  Mean: {views_mean:.0f}")
+        monitor.log(f"  Median: {views_median:.0f}")
+        monitor.log(f"  Mean > Median: {views_mean > views_median} (expected for exponential)")
+        
+        # Verify distributions are reasonable
+        assert 0.99 <= min(prices) <= max(prices) <= 999.99, "Price out of range"
+        assert abs(price_mean - price_expected_mean) < 50, "Uniform distribution mean too far off"
+        
+        assert 1 <= min(ratings) <= max(ratings) <= 5, "Rating out of range"
+        assert 2 <= rating_mean <= 4, "Normal distribution mean unexpected"
+        
+        assert 0 <= min(views) <= max(views) <= 1000000, "Views out of range"
+        assert views_mean > views_median, "Exponential distribution should have mean > median"
+        
+        monitor.log("\n✅ All numeric distributions validated successfully")
+        monitor.log("")
+    
+    def test_sparse_vector_generation(self):
+        """Test sparse vector generation"""
+        monitor = self.progress_monitor
+        monitor.log("\n🧪 Testing Sparse Vector Generation")
+        monitor.log("=" * 60)
+        
+        schema = create_simple_schema(
+            index_name="test_sparse",
+            vector_dim=100,
+            include_numeric=True,
+            vector_algorithm=VectorAlgorithm.FLAT,
+            vector_metric=VectorMetric.L2
+        )
+        
+        # Test different sparsity levels
+        sparsity_levels = [0.0, 0.3, 0.7, 0.9]
+        
+        for target_sparsity in sparsity_levels:
+            config = HashGeneratorConfig(
+                num_keys=100,
+                schema=schema,
+                vector_sparsity=target_sparsity,
+                batch_size=100
+            )
+            gen = HashKeyGenerator(config)
+            
+            actual_sparsities = []
+            
+            for batch in gen:
+                for key, fields in batch:
+                    vec = np.frombuffer(fields['embedding'], dtype=np.float32)
+                    non_zero = np.count_nonzero(vec)
+                    actual_sparsity = 1 - (non_zero / len(vec))
+                    actual_sparsities.append(actual_sparsity)
+            
+            avg_sparsity = np.mean(actual_sparsities)
+            monitor.log(f"\nTarget sparsity: {target_sparsity:.1%}")
+            monitor.log(f"  Actual average: {avg_sparsity:.1%}")
+            monitor.log(f"  Deviation: {abs(avg_sparsity - target_sparsity):.1%}")
+            
+            # Allow some deviation due to randomness
+            assert abs(avg_sparsity - target_sparsity) < 0.05, \
+                f"Sparsity deviation too large: target={target_sparsity}, actual={avg_sparsity}"
+        
+        monitor.log("\n✅ Sparse vector generation validated")
         monitor.log("")

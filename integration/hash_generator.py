@@ -51,6 +51,11 @@ class VectorFieldSchema:
     # Optional: initial capacity, block size, etc.
     initial_cap: Optional[int] = None
     block_size: Optional[int] = None
+    # HNSW specific parameters
+    m: Optional[int] = None  # Number of connections for HNSW
+    ef_construction: Optional[int] = None  # Size of dynamic candidate list
+    ef_runtime: Optional[int] = None  # Size of dynamic candidate list for search
+    epsilon: Optional[float] = None  # Relative factor for early termination
 
 
 @dataclass
@@ -66,6 +71,9 @@ class FieldSchema:
     weight: float = 1.0
     sortable: bool = False
     no_index: bool = False
+    # For NUMERIC fields
+    numeric_range: Optional[Tuple[float, float]] = None  # (min, max)
+    numeric_distribution: str = "uniform"  # "uniform", "normal", "exponential"
 
 
 @dataclass
@@ -99,8 +107,12 @@ class HashGeneratorConfig:
     tags_config: Optional[TagsConfig] = None
     
     # Vector generation config
-    vector_normalize: bool = True  # Normalize vectors for cosine similarity
+    vector_normalize: bool = False  # Normalize vectors for cosine similarity
     vector_distribution: str = "normal"  # "normal" or "uniform"
+    vector_sparsity: float = 0.0  # Fraction of zero elements (0.0 to 1.0)
+    
+    # Numeric field generation config
+    numeric_defaults: Dict[str, Tuple[float, float]] = field(default_factory=dict)  # field_name -> (min, max)
     
     # Additional fields to generate
     additional_fields: Dict[str, Any] = field(default_factory=dict)
@@ -204,7 +216,7 @@ class HashKeyGenerator:
             self.config.tags_config.batch_size = self.config.batch_size
             self._tags_generator = TagsBuilder(self.config.tags_config)
         
-        # Initialize other field generators
+        # Initialize other field generators and validate configurations
         for field in self.config.schema.fields:
             if field.type == FieldType.TEXT:
                 # Text field generator
@@ -218,8 +230,40 @@ class HashKeyGenerator:
                 self._field_generators[field.name] = StringGenerator(text_config)
             
             elif field.type == FieldType.NUMERIC:
-                # Will generate inline
-                pass
+                # Validate numeric configuration
+                if field.numeric_range:
+                    min_val, max_val = field.numeric_range
+                    if min_val >= max_val:
+                        raise ValueError(f"Invalid numeric range for field {field.name}: min ({min_val}) >= max ({max_val})")
+                
+                if field.numeric_distribution not in ["uniform", "normal", "exponential"]:
+                    raise ValueError(f"Invalid numeric distribution for field {field.name}: {field.numeric_distribution}")
+            
+            elif field.type == FieldType.VECTOR:
+                # Validate vector configuration
+                if not field.vector_config:
+                    raise ValueError(f"Vector field {field.name} missing vector_config")
+                
+                cfg = field.vector_config
+                if cfg.dim <= 0:
+                    raise ValueError(f"Invalid vector dimension for field {field.name}: {cfg.dim}")
+                
+                if cfg.algorithm == VectorAlgorithm.HNSW:
+                    # Set HNSW defaults if not specified
+                    if cfg.m is None:
+                        cfg.m = 16
+                    if cfg.ef_construction is None:
+                        cfg.ef_construction = 200
+                    
+                    # Validate HNSW parameters
+                    if cfg.m <= 0:
+                        raise ValueError(f"Invalid HNSW M parameter for field {field.name}: {cfg.m}")
+                    if cfg.ef_construction and cfg.ef_construction < cfg.m:
+                        raise ValueError(f"HNSW ef_construction ({cfg.ef_construction}) must be >= M ({cfg.m})")
+                
+                # Validate sparsity
+                if self.config.vector_sparsity < 0 or self.config.vector_sparsity >= 1:
+                    raise ValueError(f"Invalid vector sparsity: {self.config.vector_sparsity} (must be in [0, 1))")
     
     def _generate_vector(self, dim: int, metric: VectorMetric) -> bytes:
         """Generate a single vector based on configuration"""
@@ -228,18 +272,49 @@ class HashKeyGenerator:
         else:  # normal
             vec = np.random.randn(dim).astype(np.float32)
         
+        # Apply sparsity if requested
+        if self.config.vector_sparsity > 0:
+            # Randomly zero out elements
+            mask = np.random.random(dim) > self.config.vector_sparsity
+            vec = vec * mask
+        
         # Normalize for cosine similarity
-        if self.config.vector_normalize and metric == VectorMetric.COSINE:
+        if self.config.vector_normalize or metric == VectorMetric.COSINE:
             norm = np.linalg.norm(vec)
             if norm > 0:
                 vec = vec / norm
         
         return vec.tobytes()
     
-    def _generate_numeric_value(self) -> float:
-        """Generate a numeric value"""
-        # Simple example - can be customized
-        return np.random.uniform(0, 1000)
+    def _generate_numeric_value(self, field_schema: FieldSchema) -> float:
+        """Generate a numeric value based on field configuration"""
+        # Check if there's a specific range configured for this field
+        if field_schema.name in self.config.numeric_defaults:
+            min_val, max_val = self.config.numeric_defaults[field_schema.name]
+        elif field_schema.numeric_range:
+            min_val, max_val = field_schema.numeric_range
+        else:
+            # Default range
+            min_val, max_val = 0, 1000
+        
+        # Generate based on distribution
+        if field_schema.numeric_distribution == "normal":
+            # Generate normal distribution centered at midpoint
+            center = (min_val + max_val) / 2
+            stddev = (max_val - min_val) / 6  # 99.7% within range
+            value = np.random.normal(center, stddev)
+            # Clip to range
+            value = np.clip(value, min_val, max_val)
+        elif field_schema.numeric_distribution == "exponential":
+            # Generate exponential distribution
+            # Map [0, inf) to [min_val, max_val]
+            exp_val = np.random.exponential(1.0)
+            # Use a sigmoid-like transformation
+            value = min_val + (max_val - min_val) * (1 - np.exp(-exp_val))
+        else:  # uniform
+            value = np.random.uniform(min_val, max_val)
+        
+        return float(value)
     
     def _generate_geo_value(self) -> str:
         """Generate a geo coordinate"""
@@ -313,7 +388,7 @@ class HashKeyGenerator:
                                 fields[field.name] = text
                     
                     elif field.type == FieldType.NUMERIC:
-                        fields[field.name] = self._generate_numeric_value()
+                        fields[field.name] = self._generate_numeric_value(field)
                     
                     elif field.type == FieldType.GEO:
                         fields[field.name] = self._generate_geo_value()
@@ -347,14 +422,32 @@ class HashKeyGenerator:
             
             if field.type == FieldType.VECTOR:
                 cfg = field.vector_config
-                cmd_parts.extend([
-                    "VECTOR",
-                    cfg.algorithm.value,
-                    "6",  # Number of parameters
+                cmd_parts.extend(["VECTOR", cfg.algorithm.value])
+                
+                # Build parameters list
+                params = [
                     "TYPE", cfg.datatype,
                     "DIM", str(cfg.dim),
                     "DISTANCE_METRIC", cfg.distance_metric.value
-                ])
+                ]
+                
+                # Add algorithm-specific parameters
+                if cfg.algorithm == VectorAlgorithm.FLAT:
+                    if cfg.initial_cap is not None:
+                        params.extend(["INITIAL_CAP", str(cfg.initial_cap)])
+                    if cfg.block_size is not None:
+                        params.extend(["BLOCK_SIZE", str(cfg.block_size)])
+                elif cfg.algorithm == VectorAlgorithm.HNSW:
+                    if cfg.m is not None:
+                        params.extend(["M", str(cfg.m)])
+                    if cfg.ef_construction is not None:
+                        params.extend(["EF_CONSTRUCTION", str(cfg.ef_construction)])
+                    if cfg.ef_runtime is not None:
+                        params.extend(["EF_RUNTIME", str(cfg.ef_runtime)])
+                    if cfg.epsilon is not None:
+                        params.extend(["EPSILON", str(cfg.epsilon)])
+                
+                cmd_parts.extend([str(len(params))] + params)
             
             elif field.type == FieldType.TAG:
                 cmd_parts.extend(["TAG", "SEPARATOR", field.separator])
@@ -383,7 +476,10 @@ def create_simple_schema(
     vector_dim: int,
     include_tags: bool = True,
     include_text: bool = True,
-    prefix: str = "doc:"
+    include_numeric: bool = False,
+    prefix: str = "doc:",
+    vector_algorithm: VectorAlgorithm = VectorAlgorithm.FLAT,
+    vector_metric: VectorMetric = VectorMetric.L2
 ) -> IndexSchema:
     """Create a simple schema with common fields"""
     fields = []
@@ -394,17 +490,78 @@ def create_simple_schema(
     if include_tags:
         fields.append(FieldSchema(name="tags", type=FieldType.TAG))
     
+    if include_numeric:
+        fields.append(FieldSchema(
+            name="score",
+            type=FieldType.NUMERIC,
+            numeric_range=(0, 100),
+            numeric_distribution="normal"
+        ))
+    
     # Always include vector
+    vector_config = VectorFieldSchema(
+        algorithm=vector_algorithm,
+        dim=vector_dim,
+        distance_metric=vector_metric
+    )
+    
+    # Add HNSW defaults if using HNSW
+    if vector_algorithm == VectorAlgorithm.HNSW:
+        vector_config.m = 16
+        vector_config.ef_construction = 200
+    
     fields.append(FieldSchema(
         name="embedding",
         type=FieldType.VECTOR,
-        vector_config=VectorFieldSchema(dim=vector_dim)
+        vector_config=vector_config
     ))
     
     return IndexSchema(
         index_name=index_name,
         prefix=[prefix],
         fields=fields
+    )
+
+
+def create_hnsw_vector_field(
+    name: str = "embedding",
+    dim: int = 768,
+    metric: VectorMetric = VectorMetric.L2,
+    m: int = 16,
+    ef_construction: int = 200,
+    ef_runtime: Optional[int] = None,
+    epsilon: Optional[float] = None
+) -> FieldSchema:
+    """Create an HNSW vector field with common configurations"""
+    return FieldSchema(
+        name=name,
+        type=FieldType.VECTOR,
+        vector_config=VectorFieldSchema(
+            algorithm=VectorAlgorithm.HNSW,
+            dim=dim,
+            distance_metric=metric,
+            m=m,
+            ef_construction=ef_construction,
+            ef_runtime=ef_runtime,
+            epsilon=epsilon
+        )
+    )
+
+
+def create_numeric_field(
+    name: str,
+    min_val: float = 0,
+    max_val: float = 1000,
+    distribution: str = "uniform",
+    sortable: bool = False
+) -> FieldSchema:
+    """Create a numeric field with specified range and distribution"""
+    return FieldSchema(
+        name=name,
+        type=FieldType.NUMERIC,
+        numeric_range=(min_val, max_val),
+        numeric_distribution=distribution,
+        sortable=sortable
     )
 
 
