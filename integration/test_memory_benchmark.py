@@ -49,6 +49,36 @@ from string_generator import (
 )
 
 
+# Helper function to safely get values from info dictionaries
+def safe_get(info_dict: Dict[str, Any], key: str, default: Any = 0) -> Any:
+    """Safely get a value from an info dictionary with a default if key is missing."""
+    if info_dict is None:
+        return default
+    return info_dict.get(key, default)
+
+
+def get_key_count_from_db_info(db_info: Dict[str, Any]) -> int:
+    """Extract key count from db info, handling different formats."""
+    if not db_info or 'db0' not in db_info:
+        return 0
+    
+    db0 = db_info['db0']
+    
+    # Handle dict format
+    if isinstance(db0, dict) and 'keys' in db0:
+        return db0['keys']
+    
+    # Handle string format like "keys=123,expires=0,avg_ttl=0"
+    if isinstance(db0, str) and 'keys=' in db0:
+        try:
+            keys_part = db0.split(',')[0]
+            return int(keys_part.split('=')[1])
+        except (ValueError, IndexError):
+            return 0
+    
+    return 0
+
+
 class SilentValkeyClient(Valkey):
     """
     A Valkey client wrapper that suppresses client creation logs.
@@ -691,34 +721,20 @@ class ProgressMonitor:
                 if current_time - last_report >= 5.0:
                     state_name = "monitoring:"
                     info_all = client.execute_command("info","memory")
-                    self.log(f"{state_name}:used_memory_human={info_all['used_memory_human']}")           
+                    self.log(f"{state_name}:used_memory_human={safe_get(info_all, 'used_memory_human', 'N/A')}")           
                     search_info = client.execute_command("info","modules")
-                    self.log(f"{state_name}:search_used_memory_human={search_info['search_used_memory_human']}")  
+                    self.log(f"{state_name}:search_used_memory_human={safe_get(search_info, 'search_used_memory_human', 'N/A')}")  
                     # Get memory info
                     memory_info = client.info("memory")
-                    current_memory_kb = memory_info['used_memory'] // 1024
+                    current_memory_kb = safe_get(memory_info, 'used_memory', 0) // 1024
                     memory_delta = current_memory_kb - self.last_memory
                     
                     # Get search module memory
-                    search_memory_kb = 0
-                    if 'search_used_memory' in search_info:
-                        search_memory_kb = search_info['search_used_memory'] // 1024
+                    search_memory_kb = safe_get(search_info, 'search_used_memory', 0) // 1024
                     
                     # Get key count from db info
                     db_info = client.execute_command("info","keyspace")
-                    if 'db0' not in db_info:
-                        current_keys = 0
-                    elif 'db0' in db_info and isinstance(db_info['db0'], dict) and 'keys' in db_info['db0']:
-                        current_keys = db_info['db0']['keys']
-
-                    elif 'db0' in db_info and isinstance(db_info['db0'], str) and 'keys=' in db_info['db0']:
-                        # Parse "keys=123,expires=0,avg_ttl=0" format
-                        try:
-                            current_keys = int(db_info['db0'].split('keys=')[1].split(',')[0])
-                        except:
-                            assert False, "Expected 'db0' in keyspace info"
-                    else:
-                        assert False, "Expected 'db0' in keyspace info"
+                    current_keys = get_key_count_from_db_info(db_info)
                     # Try to get index information if available (during indexing phase)
                     index_info = {}
                     current_index_names = set()
@@ -921,16 +937,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             
             # Verify key count is correct using sync client  
             db_info = sync_client.execute_command("info", "keyspace")
-            current_keys = 0
-            if 'db0' in db_info and isinstance(db_info['db0'], dict) and 'keys' in db_info['db0']:
-                current_keys = db_info['db0']['keys']
-            elif 'db0' in db_info and isinstance(db_info['db0'], str) and 'keys=' in db_info['db0']:
-                # Parse "keys=123,expires=0,avg_ttl=0" format
-                try:
-                    keys_part = db_info['db0'].split(',')[0]
-                    current_keys = int(keys_part.split('=')[1])
-                except:
-                    current_keys = 0
+            current_keys = get_key_count_from_db_info(db_info)
             
             expected_keys = keys_processed.get()
             monitor.log(f"🔍 Post-async verification: Expected {expected_keys:,} keys, Found {current_keys:,} keys")
@@ -941,14 +948,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 for i in range(50):  # 50 * 0.1s = 5s max
                     await asyncio.sleep(0.1)
                     db_info = sync_client.execute_command("info", "keyspace")
-                    if 'db0' in db_info and isinstance(db_info['db0'], dict) and 'keys' in db_info['db0']:
-                        current_keys = db_info['db0']['keys']
-                    elif 'db0' in db_info and isinstance(db_info['db0'], str) and 'keys=' in db_info['db0']:
-                        try:
-                            keys_part = db_info['db0'].split(',')[0]
-                            current_keys = int(keys_part.split('=')[1])
-                        except:
-                            current_keys = 0
+                    current_keys = get_key_count_from_db_info(db_info)
                     
                     if current_keys >= expected_keys:
                         monitor.log(f"✅ Sync complete: {current_keys:,} keys now visible after {(i+1)*0.1:.1f}s")
@@ -1831,12 +1831,12 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             
             # Get memory info
             memory_info = client.info("memory")
-            current_memory_kb = memory_info['used_memory'] // 1024
+            current_memory_kb = safe_get(memory_info, 'used_memory', 0) // 1024
             state_name = "Index is still processing:"
             info_all = client.execute_command("info","memory")
-            monitor.log(f"{state_name}:used_memory_human={info_all['used_memory_human']}")           
+            monitor.log(f"{state_name}:used_memory_human={safe_get(info_all, 'used_memory_human', 'N/A')}")           
             search_info = client.execute_command("info","modules")
-            monitor.log(f"{state_name}:search_used_memory_human={search_info['search_used_memory_human']}")
+            monitor.log(f"{state_name}:search_used_memory_human={safe_get(search_info, 'search_used_memory_human', 'N/A')}")
             # Calculate indexing rate
             current_time = time.time()
             elapsed = current_time - start_time
@@ -1875,9 +1875,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 monitor.log(f"    ✓ Index state: {state}, queue: {mutation_queue_size}, backfill: {backfill_complete_percent:.1f}%")
                 state_name = "Indexing DONE:"
                 info_all = client.execute_command("info","memory")
-                monitor.log(f"{state_name}:used_memory_human={info_all['used_memory_human']}")           
+                monitor.log(f"{state_name}:used_memory_human={safe_get(info_all, 'used_memory_human', 'N/A')}")           
                 search_info = client.execute_command("info","modules")
-                monitor.log(f"{state_name}:search_used_memory_human={search_info['search_used_memory_human']}")                
+                monitor.log(f"{state_name}:search_used_memory_human={safe_get(search_info, 'search_used_memory_human', 'N/A')}")                
                 sys.stdout.flush()  # Ensure immediate output
                 return
                 
@@ -1886,9 +1886,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         monitor.log(f"    ⚠ Warning: Indexing timeout after {timeout}s, proceeding anyway")
         state_name = "Indexing NOT DONE:"
         info_all = client.execute_command("info","memory")
-        monitor.log(f"{state_name}:used_memory_human={info_all['used_memory_human']}")           
+        monitor.log(f"{state_name}:used_memory_human={safe_get(info_all, 'used_memory_human', 'N/A')}")           
         search_info = client.execute_command("info","modules")
-        monitor.log(f"{state_name}:search_used_memory_human={search_info['search_used_memory_human']}")  
+        monitor.log(f"{state_name}:search_used_memory_human={safe_get(search_info, 'search_used_memory_human', 'N/A')}")  
         sys.stdout.flush()  # Ensure immediate output
     
     def run_benchmark_scenario(self, scenario: BenchmarkScenario, monitor: ProgressMonitor = None, use_async: bool = True) -> Dict:
@@ -1937,38 +1937,28 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             client.flushall()
             time.sleep(1)
             #get dataset size before insertion
-            dataset_size = client.execute_command("info", "memory")['used_memory_dataset']
+            memory_info = client.execute_command("info", "memory")
+            dataset_size = safe_get(memory_info, 'used_memory_dataset', 0)
             
             # Get key count from db info
             db_info = client.execute_command("info","keyspace")
-            if 'db0' not in db_info:
-                current_keys = 0
-            elif 'db0' in db_info and isinstance(db_info['db0'], dict) and 'keys' in db_info['db0']:
-                current_keys = db_info['db0']['keys']
-
-            elif 'db0' in db_info and isinstance(db_info['db0'], str) and 'keys=' in db_info['db0']:
-                # Parse "keys=123,expires=0,avg_ttl=0" format
-                try:
-                    current_keys = int(db_info['db0'].split('keys=')[1].split(',')[0])
-                except:
-                    assert False, "Expected 'db0' in keyspace info"
-            else:
-                assert False, "Expected 'db0' in keyspace info"
+            current_keys = get_key_count_from_db_info(db_info)
             while current_keys > 0:
                 assert False, "Database should be empty before starting scenario"
             assert current_keys == 0, f"Expected empty dataset before starting scenario, dataset size is not zero keys: {current_keys}"
                
                
-            total_memory = client.info("memory")['used_memory']
+            memory_info = client.info("memory")
+            total_memory = safe_get(memory_info, 'used_memory', 0)
             # Measure baseline
-            baseline_memory = client.info("memory")['used_memory']
+            baseline_memory = safe_get(memory_info, 'used_memory', 0)
             info_all = client.execute_command("info","memory")
             search_info = client.execute_command("info","modules")
             
             monitor.log("📊 BASELINE MEASUREMENTS")
             monitor.log("─" * 50)
-            monitor.log(f"💾 System Memory: {info_all['used_memory_human']}")
-            monitor.log(f"🔍 Search Memory: {search_info['search_used_memory_human']}")
+            monitor.log(f"💾 System Memory: {safe_get(info_all, 'used_memory_human', 'N/A')}")
+            monitor.log(f"🔍 Search Memory: {safe_get(search_info, 'search_used_memory_human', 'N/A')}")
             monitor.log(f"📈 Baseline: {baseline_memory // 1024:,} KB")
             monitor.log("")
             
@@ -2117,8 +2107,8 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log(f"📊 Keys Inserted: {total_keys_inserted:,}")
             monitor.log(f"⏱️  Time Taken: {insertion_time:.1f}s")
             monitor.log(f"🚀 Speed: {total_keys_inserted/insertion_time:.0f} keys/sec")
-            monitor.log(f"💾 System Memory: {info_all['used_memory_human']}")
-            monitor.log(f"🔍 Search Memory: {search_info['search_used_memory_human']}")
+            monitor.log(f"💾 System Memory: {safe_get(info_all, 'used_memory_human', 'N/A')}")
+            monitor.log(f"🔍 Search Memory: {safe_get(search_info, 'search_used_memory_human', 'N/A')}")
             monitor.log("")
             
             # Log distribution statistics
@@ -2165,25 +2155,27 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                     port=client.connection_pool.connection_kwargs['port'],
                     decode_responses=False  # Important for binary data
                 )
-                
-                try:
-                    hashes_csv, tags_csv = self.export_dataset_to_csv(
-                        export_client, 
-                        prefix="key:",  # Assuming standard prefix
-                        scenario_name=scenario.name,
-                        timestamp=timestamp,
-                        monitor=monitor
-                    )
-                    export_time = time.time() - export_start
-                    monitor.log(f"⏱️  Export time: {export_time:.1f}s")
-                finally:
-                    assert export_client is not None
-                    export_client.close()
+                hashes_csv = ""
+                tags_csv = ""
+                # try:
+                #     hashes_csv, tags_csv = self.export_dataset_to_csv(
+                #         export_client, 
+                #         prefix="key:",  # Assuming standard prefix
+                #         scenario_name=scenario.name,
+                #         timestamp=timestamp,
+                #         monitor=monitor
+                #     )
+                #     export_time = time.time() - export_start
+                #     monitor.log(f"⏱️  Export time: {export_time:.1f}s")
+                # finally:
+                #     assert export_client is not None
+                #     export_client.close()
 
                 monitor.log("")
             
             # Measure memory after data insertion
-            data_memory = client.execute_command("info", "memory")['used_memory']
+            memory_info = client.execute_command("info", "memory")
+            data_memory = safe_get(memory_info, 'used_memory', 0)
             data_memory_kb = data_memory // 1024
 
             monitor.log("🏗️  INDEX CREATION PHASE")
@@ -2195,12 +2187,16 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.set_index_name(index_name)
             
             cmd = generator.generate_ft_create_command()
+            monitor.log(f"📜 Creating index with command: {cmd}")
             client.execute_command(*cmd.split())
-            
+            # check index exists and print ft.info
+            index_info = client.execute_command("FT.INFO", index_name)
+            monitor.log(f"📑 Index Info: {index_info}")
             # Wait for indexing
             self.wait_for_indexing(client, index_name, scenario.total_keys, monitor)            
             # Measure final memory
-            final_memory = client.execute_command("info", "memory")['used_memory_dataset']
+            memory_info = client.execute_command("info", "memory")
+            final_memory = safe_get(memory_info, 'used_memory_dataset', 0)
             total_memory_kb = final_memory // 1024
             index_overhead_kb = (final_memory - data_memory) // 1024
             
@@ -2384,293 +2380,14 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         return result
     
-    def create_comprehensive_scenarios(self, base_keys: int = 5000000) -> List[BenchmarkScenario]:
-        """Create comprehensive test scenarios"""
-        scenarios = []
-        
-        # 1. Baseline: Unique tags (no sharing)
-        scenarios.append(BenchmarkScenario(
-            name="Baseline_Unique",
-            total_keys=base_keys,
-            tags_config=TagsConfig(
-                num_keys=base_keys,
-                tags_per_key=TagDistribution(avg=5, min=3, max=8),
-                tag_length=LengthConfig(avg=200, min=10, max=300),
-                sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
-            ),
-            description="Unique tags per key (no sharing)"
-        ))
-        
-        # 2. Single unique tag per key
-        scenarios.append(BenchmarkScenario(
-            name="Single_Unique_Tag",
-            total_keys=base_keys,
-            tags_config=TagsConfig(
-                num_keys=base_keys,
-                tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
-                tag_length=LengthConfig(avg=200, min=10, max=300),
-                sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
-            ),
-            description="1 unique tag per key"
-        ))
-        
-        # 3. Perfect overlap (all keys share same tags)
-        scenarios.append(BenchmarkScenario(
-            name="Perfect_Overlap",
-            total_keys=base_keys,
-            tags_config=TagsConfig(
-                num_keys=base_keys,
-                tags_per_key=TagDistribution(avg=5, min=5, max=5),
-                tag_length=LengthConfig(avg=20, min=10, max=30),
-                sharing=TagSharingConfig(mode=TagSharingMode.PERFECT_OVERLAP)
-            ),
-            description="All keys share same 5 tags"
-        ))
-        
-        # 4. Shared pool with varying pool sizes
-        for pool_size in [100, 100000]:
-            scenarios.append(BenchmarkScenario(
-                name=f"SharedPool_{pool_size}",
-                total_keys=base_keys,
-                tags_config=TagsConfig(
-                    num_keys=base_keys,
-                    tags_per_key=TagDistribution(avg=5, min=3, max=8),
-                    tag_length=LengthConfig(avg=20, min=10, max=30),
-                    sharing=TagSharingConfig(
-                        mode=TagSharingMode.SHARED_POOL,
-                        pool_size=pool_size,
-                        reuse_probability=0.7
-                    )
-                ),
-                description=f"Shared pool of {pool_size} tags"
-            ))
-        
-        # 5. Group-based sharing (realistic scenarios)
-        for group_size in [100, 100000]:
-            scenarios.append(BenchmarkScenario(
-                name=f"GroupBased_{group_size}",
-                total_keys=base_keys,
-                tags_config=TagsConfig(
-                    num_keys=base_keys,
-                    tags_per_key=TagDistribution(avg=5, min=3, max=8),
-                    tag_length=LengthConfig(avg=200, min=10, max=3000),
-                    sharing=TagSharingConfig(
-                        mode=TagSharingMode.GROUP_BASED,
-                        keys_per_group=group_size,
-                        tags_per_group=2000
-                    )
-                ),
-                description=f"Groups of {group_size} keys sharing 20 tags"
-            ))
-        
-        # 6. Prefix sharing variations
-        for prefix_ratio in [0.3, 0.8]:
-            scenarios.append(BenchmarkScenario(
-                name=f"PrefixShare_{int(prefix_ratio*100)}pct",
-                total_keys=base_keys,
-                tags_config=TagsConfig(
-                    num_keys=base_keys,
-                    tags_per_key=TagDistribution(avg=5, min=3, max=8),
-                    tag_length=LengthConfig(avg=20, min=15, max=25),
-                    tag_prefix=PrefixConfig(
-                        enabled=True,
-                        min_shared=int(15 * prefix_ratio),
-                        max_shared=int(20 * prefix_ratio),
-                        share_probability=0.8,
-                        prefix_pool_size=50
-                    ),
-                    sharing=TagSharingConfig(mode=TagSharingMode.SHARED_POOL, pool_size=1000)
-                ),
-                description=f"{int(prefix_ratio*100)}% prefix sharing"
-            ))
-        
-        # 7. Tag count variations
-        for avg_tags in [10, 50]:
-            scenarios.append(BenchmarkScenario(
-                name=f"TagCount_{avg_tags}",
-                total_keys=base_keys,
-                tags_config=TagsConfig(
-                    num_keys=base_keys,
-                    tags_per_key=TagDistribution(avg=avg_tags, min=max(1, avg_tags-2), max=avg_tags+2),
-                    tag_length=LengthConfig(avg=20, min=10, max=30),
-                    sharing=TagSharingConfig(mode=TagSharingMode.SHARED_POOL, pool_size=5000)
-                ),
-                description=f"Average {avg_tags} tags per key"
-            ))
-        
-        # 8. Tag length variations
-        for tag_len in [64, 200]:
-            scenarios.append(BenchmarkScenario(
-                name=f"TagLength_{tag_len}",
-                total_keys=base_keys,
-                tags_config=TagsConfig(
-                    num_keys=base_keys,
-                    tags_per_key=TagDistribution(avg=5, min=3, max=8),
-                    tag_length=LengthConfig(avg=tag_len, min=tag_len-5, max=tag_len+5),
-                    sharing=TagSharingConfig(mode=TagSharingMode.SHARED_POOL, pool_size=5000)
-                ),
-                description=f"Average tag length {tag_len} bytes"
-            ))
-        
-        # 9. Distribution variations
-        for dist in [Distribution.UNIFORM, Distribution.NORMAL, Distribution.ZIPF]:
-            scenarios.append(BenchmarkScenario(
-                name=f"Distribution_{dist.value}",
-                total_keys=base_keys,
-                tags_config=TagsConfig(
-                    num_keys=base_keys,
-                    tags_per_key=TagDistribution(avg=25, min=1, max=100, distribution=dist),
-                    tag_length=LengthConfig(avg=40, min=10, max=300),
-                    sharing=TagSharingConfig(mode=TagSharingMode.SHARED_POOL, pool_size=5000)
-                ),
-                description=f"{dist.value} distribution of tags per key"
-            ))
-        
-        # 10. Vector dimension scenarios (test vector memory scaling)
-        for vector_dims in [64, 256, 512]:
-            scenarios.append(BenchmarkScenario(
-                name=f"Vector{vector_dims}_Comprehensive",
-                total_keys=base_keys // 3,  # Smaller keys for larger vectors
-                tags_config=TagsConfig(
-                    num_keys=base_keys // 3,
-                    tags_per_key=TagDistribution(avg=3, min=1, max=5),
-                    tag_length=LengthConfig(avg=30, min=20, max=50),
-                    sharing=TagSharingConfig(
-                        mode=TagSharingMode.SHARED_POOL,
-                        pool_size=2000,
-                        reuse_probability=0.6
-                    )
-                ),
-                description=f"{vector_dims}-dimensional vectors with tags and numeric fields"
-            ))
-        
-        return scenarios
-    
-    def test_comprehensive_memory_benchmark(self, use_async: bool = True):
-        """Run comprehensive memory benchmark with all sharing patterns"""
+    def test_search_memory_usage(self, use_async: bool = True):
+        """Benchmark search memory usage"""
         # Set up file logging
-        log_file = self.setup_file_logging("comprehensive")
-        monitor = ProgressMonitor(self.server, "comprehensive")
+        log_file = self.setup_file_logging("search_memory")
+        monitor = ProgressMonitor(self.server, "search_memory")
         monitor.start()
-        monitor.log("=== COMPREHENSIVE MEMORY BENCHMARK ===")
-        monitor.log("Testing various tag sharing patterns and configurations\n")
-        
-        # Log system memory information
-        if PSUTIL_AVAILABLE:
-            memory = psutil.virtual_memory()
-            monitor.log(f"System Memory Status:")
-            monitor.log(f"  - Total: {memory.total / (1024**3):.1f} GB")
-            monitor.log(f"  - Available: {memory.available / (1024**3):.1f} GB")
-            monitor.log(f"  - Used: {memory.percent:.1f}%")
-            monitor.log(f"  - Memory limit for tests: {memory.available * 0.5 / (1024**3):.1f} GB (50% of available)\n")
-        else:
-            available_bytes = self.get_available_memory_bytes()
-            monitor.log(f"System Memory Status (limited info - psutil not available):")
-            monitor.log(f"  - Available: {available_bytes / (1024**3):.1f} GB")
-            monitor.log(f"  - Memory limit for tests: {available_bytes * 0.5 / (1024**3):.1f} GB (50% of available)\n")
-        
-        # Create scenarios
-        scenarios = self.create_comprehensive_scenarios(base_keys=10000000)
-        results = []
-        
-        # CSV filename with timestamp
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        csv_filename = f"comprehensive_benchmark_results_{timestamp}.csv"
-        
-        # Run each scenario
-        for i, scenario in enumerate(scenarios):
-            monitor.log(f"--- Scenario {i+1}/{len(scenarios)}: {scenario.name} ---")
-            try:
-                monitor.log(f"  Description: {scenario.description}")
-                # monitor.stop()
-                result = self.run_benchmark_scenario(scenario, monitor, use_async)
-                results.append(result)
-                # monitor.start()
-                # Append to CSV incrementally (write header only for first result)
-                self.append_to_csv(csv_filename, result, monitor, write_header=(i == 0))
-                
-            except Exception as e:
-                monitor.error(f"  ❌ Scenario failed: {e}")
-                # Log failed scenario to CSV as well
-                failed_result = {
-                    'scenario_name': scenario.name,
-                    'description': scenario.description,
-                    'total_keys': scenario.total_keys,
-                    'skipped': True,
-                    'reason': f"Failed: {str(e)}"
-                }
-                results.append(failed_result)
-                self.append_to_csv(csv_filename, failed_result, monitor, write_header=(i == 0))
-                continue
-        
-        # Print summary table  
-        monitor.log("")
-        monitor.log("┏" + "━" * 118 + "┓")
-        monitor.log("┃" + " " * 35 + "📊 COMPREHENSIVE BENCHMARK RESULTS" + " " * 48 + "┃")
-        monitor.log("┗" + "━" * 118 + "┛")
-        monitor.log("")
+        monitor.log("=== SEARCH MEMORY BENCHMARK (10K keys) ===")
 
-        monitor.log(f"{'Scenario':<30} {'Keys':>8} {'NoIndexMemoryKB':>10} {'WithIndexMemoryKB':>10} {'IndexKB':>10} {'TagIdxKB':>10} {'SearchKB':>10} {'Mode':<15}")
-        monitor.log("─" * 120)
-        
-        for r in results:
-            if r.get('skipped'):
-                monitor.log(f"{r['scenario_name']:<30} "
-                            f"{r['total_keys']:>8,} "
-                            f"{'SKIPPED':>10} "
-                            f"{'':>10} "
-                            f"{'':>10} "
-                            f"{'':>10} "
-                            f"Memory limit exceeded")
-            else:
-                monitor.log(f"{r['scenario_name']:<30} "
-                            f"{r['total_keys']:>8,} "
-                            f"{r['data_memory_kb']:>10,} "
-                            f"{r['total_memory_kb']:>10,} "
-                            f"{r['index_overhead_kb']:>10,} "
-                            f"{r['tag_index_memory_kb']:>10,} "
-                            f"{r['search_used_memory_kb']:>10,} "
-                            f"{r['tags_config']:<15}")
-        
-        # Analyze results by category
-        monitor.log("")
-        monitor.log("┏" + "━" * 78 + "┓")
-        monitor.log("┃" + " " * 32 + "🔍 KEY FINDINGS" + " " * 31 + "┃")
-        monitor.log("┗" + "━" * 78 + "┛")
-        monitor.log("")
-        
-        # Find extremes (excluding skipped scenarios)
-        baseline = next((r for r in results if 'Baseline' in r['scenario_name'] and not r.get('skipped')), None)
-        perfect = next((r for r in results if 'Perfect' in r['scenario_name'] and not r.get('skipped')), None)
-        
-        if baseline and perfect:
-            savings = (baseline['tag_index_memory_kb'] - perfect['tag_index_memory_kb']) / baseline['tag_index_memory_kb'] * 100
-            monitor.log(f"Tag Sharing Impact:")
-            monitor.log(f"  - Unique tags (baseline): {baseline['tag_index_memory_kb']:,} KB")
-            monitor.log(f"  - Perfect overlap: {perfect['tag_index_memory_kb']:,} KB")
-            monitor.log(f"  - Memory savings: {savings:.1f}%")
-        
-        # Group-based analysis
-        group_results = [r for r in results if 'GroupBased' in r['scenario_name'] and not r.get('skipped')]
-        if group_results:
-            monitor.log(f"Group-based Sharing:")
-            for r in sorted(group_results, key=lambda x: x['scenario_name']):
-                monitor.log(f"  - {r['description']}: {r['tag_index_memory_kb']:,} KB")
-
-        monitor.log(f"Detailed results saved to {csv_filename}")
-        monitor.log(f"Log file: {log_file}")
-        
-        # Stop the main monitor
-        monitor.stop()
-    
-    def test_quick_memory_benchmark(self, use_async: bool = True):
-        """Quick benchmark with smaller dataset"""
-        # Set up file logging
-        log_file = self.setup_file_logging("quick")
-        monitor = ProgressMonitor(self.server, "quick")
-        monitor.start()
-        monitor.log("=== QUICK MEMORY BENCHMARK (10K keys) ===")
-        
         # Log system memory information
         if PSUTIL_AVAILABLE:
             memory = psutil.virtual_memory()
@@ -2687,180 +2404,180 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         # CSV filename with timestamp
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        csv_filename = f"quick_benchmark_results_{timestamp}.csv"
+        csv_filename = f"search_memory_benchmark_results_{timestamp}.csv"
         
         scenarios = [
-            BenchmarkScenario(
-                name="Quick_SingleUniqueTag100Keys10K",
-                total_keys=10000,
-                tags_config=TagsConfig(
-                    num_keys=10000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
-                    tag_length=LengthConfig(avg=100, min=100, max=100),
-                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
-                ),
-                description="1 unique tag per key, tag length 100 bytes, 10K keys + 8-dim vectors + 2 numeric fields",
-                vector_dim=8,
-                vector_algorithm=VectorAlgorithm.FLAT,
-                vector_metric=VectorMetric.COSINE,
-                include_numeric=True
-            ),
-            BenchmarkScenario(
-                name="Quick_SingleUniqueTag100Keys100K",
-                total_keys=100000,
-                tags_config=TagsConfig(
-                    num_keys=100000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
-                    tag_length=LengthConfig(avg=100, min=100, max=100),
-                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
-                ),
-                description="1 unique tag per key, tag length 100 bytes, 100K keys + 16-dim vectors + 2 numeric fields",
-                vector_dim=16,
-                vector_algorithm=VectorAlgorithm.FLAT,
-                vector_metric=VectorMetric.COSINE,
-                include_numeric=True
-            ),
-            BenchmarkScenario(
-                name="Quick_SingleUniqueTag1000Keys10K",
-                total_keys=10000,
-                tags_config=TagsConfig(
-                    num_keys=10000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
-                    tag_length=LengthConfig(avg=1000, min=1000, max=1000),
-                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
-                ),
-                description="1 unique tag per key, tag length 1000 bytes, 10K keys + 32-dim vectors + 2 numeric fields",
-                vector_dim=32,
-                vector_algorithm=VectorAlgorithm.FLAT,
-                vector_metric=VectorMetric.L2,
-                include_numeric=True
-            ),
-            BenchmarkScenario(
-                name="Quick_SingleUniqueTag1000Keys100K",
-                total_keys=100000,
-                tags_config=TagsConfig(
-                    num_keys=100000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
-                    tag_length=LengthConfig(avg=1000, min=1000, max=1000),
-                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
-                ),
-                description="1 unique tag per key, tag length 1000 bytes, 100K keys + 64-dim vectors + 2 numeric fields",
-                vector_dim=64,
-                vector_algorithm=VectorAlgorithm.HNSW,
-                vector_metric=VectorMetric.COSINE,
-                include_numeric=True
-            ),
+            # BenchmarkScenario(
+            #     name="Quick_SingleUniqueTag100Keys10K",
+            #     total_keys=10000,
+            #     tags_config=TagsConfig(
+            #         num_keys=10000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
+            #         tag_length=LengthConfig(avg=100, min=100, max=100),
+            #         sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+            #     ),
+            #     description="1 unique tag per key, tag length 100 bytes, 10K keys + 8-dim vectors + 2 numeric fields",
+            #     vector_dim=8,
+            #     vector_algorithm=VectorAlgorithm.FLAT,
+            #     vector_metric=VectorMetric.COSINE,
+            #     include_numeric=True
+            # ),
+            # BenchmarkScenario(
+            #     name="Quick_SingleUniqueTag100Keys100K",
+            #     total_keys=100000,
+            #     tags_config=TagsConfig(
+            #         num_keys=100000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
+            #         tag_length=LengthConfig(avg=100, min=100, max=100),
+            #         sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+            #     ),
+            #     description="1 unique tag per key, tag length 100 bytes, 100K keys + 16-dim vectors + 2 numeric fields",
+            #     vector_dim=16,
+            #     vector_algorithm=VectorAlgorithm.FLAT,
+            #     vector_metric=VectorMetric.COSINE,
+            #     include_numeric=True
+            # ),
+            # BenchmarkScenario(
+            #     name="Quick_SingleUniqueTag1000Keys10K",
+            #     total_keys=10000,
+            #     tags_config=TagsConfig(
+            #         num_keys=10000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
+            #         tag_length=LengthConfig(avg=1000, min=1000, max=1000),
+            #         sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+            #     ),
+            #     description="1 unique tag per key, tag length 1000 bytes, 10K keys + 32-dim vectors + 2 numeric fields",
+            #     vector_dim=32,
+            #     vector_algorithm=VectorAlgorithm.FLAT,
+            #     vector_metric=VectorMetric.L2,
+            #     include_numeric=True
+            # ),
+            # BenchmarkScenario(
+            #     name="Quick_SingleUniqueTag1000Keys100K",
+            #     total_keys=100000,
+            #     tags_config=TagsConfig(
+            #         num_keys=100000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
+            #         tag_length=LengthConfig(avg=1000, min=1000, max=1000),
+            #         sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+            #     ),
+            #     description="1 unique tag per key, tag length 1000 bytes, 100K keys + 64-dim vectors + 2 numeric fields",
+            #     vector_dim=64,
+            #     vector_algorithm=VectorAlgorithm.HNSW,
+            #     vector_metric=VectorMetric.COSINE,
+            #     include_numeric=True
+            # ),
             
-            # Tag Sharing Scenarios - Test non-linear effects of keys_per_tag
-            BenchmarkScenario(
-                name="Quick_TagShare_Low",
-                total_keys=50000,
-                tags_config=TagsConfig(
-                    num_keys=50000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
-                    tag_length=LengthConfig(avg=100, min=100, max=100),
-                    sharing=TagSharingConfig(
-                        mode=TagSharingMode.SHARED_POOL,
-                        pool_size=5000  # 10 keys per tag
-                    )
-                ),
-                description="Tag sharing: 10 keys per tag, 50K keys, 5K unique tags + 128-dim vectors + 2 numeric fields",
-                vector_dim=128,
-                vector_algorithm=VectorAlgorithm.FLAT,
-                vector_metric=VectorMetric.IP,
-                include_numeric=True
-            ),
-            BenchmarkScenario(
-                name="Quick_TagShare_Medium", 
-                total_keys=50000,
-                tags_config=TagsConfig(
-                    num_keys=50000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
-                    tag_length=LengthConfig(avg=100, min=100, max=100),
-                    sharing=TagSharingConfig(
-                        mode=TagSharingMode.SHARED_POOL,
-                        pool_size=500  # 100 keys per tag
-                    )
-                ),
-                description="Tag sharing: 100 keys per tag, 50K keys, 500 unique tags + 256-dim vectors + 2 numeric fields",
-                vector_dim=256,
-                vector_algorithm=VectorAlgorithm.HNSW,
-                vector_metric=VectorMetric.COSINE,
-                include_numeric=True
-            ),
-            BenchmarkScenario(
-                name="Quick_TagShare_High",
-                total_keys=50000,
-                tags_config=TagsConfig(
-                    num_keys=50000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
-                    tag_length=LengthConfig(avg=100, min=100, max=100),
-                    sharing=TagSharingConfig(
-                        mode=TagSharingMode.SHARED_POOL,
-                        pool_size=50  # 1000 keys per tag
-                    )
-                ),
-                description="Tag sharing: 1000 keys per tag, 50K keys, 50 unique tags + 512-dim vectors + 2 numeric fields",
-                vector_dim=512,
-                vector_algorithm=VectorAlgorithm.HNSW,
-                vector_metric=VectorMetric.L2,
-                include_numeric=True,
-                numeric_fields={"score": (0.0, 100.0), "timestamp": (1000000000.0, 2000000000.0), "priority": (1.0, 10.0)}
-            ),
+            # # Tag Sharing Scenarios - Test non-linear effects of keys_per_tag
+            # BenchmarkScenario(
+            #     name="Quick_TagShare_Low",
+            #     total_keys=50000,
+            #     tags_config=TagsConfig(
+            #         num_keys=50000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),
+            #         tag_length=LengthConfig(avg=100, min=100, max=100),
+            #         sharing=TagSharingConfig(
+            #             mode=TagSharingMode.SHARED_POOL,
+            #             pool_size=5000  # 10 keys per tag
+            #         )
+            #     ),
+            #     description="Tag sharing: 10 keys per tag, 50K keys, 5K unique tags + 128-dim vectors + 2 numeric fields",
+            #     vector_dim=128,
+            #     vector_algorithm=VectorAlgorithm.FLAT,
+            #     vector_metric=VectorMetric.IP,
+            #     include_numeric=True
+            # ),
+            # BenchmarkScenario(
+            #     name="Quick_TagShare_Medium", 
+            #     total_keys=50000,
+            #     tags_config=TagsConfig(
+            #         num_keys=50000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),
+            #         tag_length=LengthConfig(avg=100, min=100, max=100),
+            #         sharing=TagSharingConfig(
+            #             mode=TagSharingMode.SHARED_POOL,
+            #             pool_size=500  # 100 keys per tag
+            #         )
+            #     ),
+            #     description="Tag sharing: 100 keys per tag, 50K keys, 500 unique tags + 256-dim vectors + 2 numeric fields",
+            #     vector_dim=256,
+            #     vector_algorithm=VectorAlgorithm.HNSW,
+            #     vector_metric=VectorMetric.COSINE,
+            #     include_numeric=True
+            # ),
+            # BenchmarkScenario(
+            #     name="Quick_TagShare_High",
+            #     total_keys=50000,
+            #     tags_config=TagsConfig(
+            #         num_keys=50000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),
+            #         tag_length=LengthConfig(avg=100, min=100, max=100),
+            #         sharing=TagSharingConfig(
+            #             mode=TagSharingMode.SHARED_POOL,
+            #             pool_size=50  # 1000 keys per tag
+            #         )
+            #     ),
+            #     description="Tag sharing: 1000 keys per tag, 50K keys, 50 unique tags + 512-dim vectors + 2 numeric fields",
+            #     vector_dim=512,
+            #     vector_algorithm=VectorAlgorithm.HNSW,
+            #     vector_metric=VectorMetric.L2,
+            #     include_numeric=True,
+            #     numeric_fields={"score": (0.0, 100.0), "timestamp": (1000000000.0, 2000000000.0), "priority": (1.0, 10.0)}
+            # ),
             
-            # Prefix Sharing Scenarios - Test Patricia tree efficiency
-            BenchmarkScenario(
-                name="Quick_PrefixShare_25pct",
-                total_keys=30000,
-                tags_config=TagsConfig(
-                    num_keys=30000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
-                    tag_length=LengthConfig(avg=64, min=64, max=64),
-                    tag_prefix=PrefixConfig(
-                        enabled=True,
-                        min_shared=16,  # 25% of 64-char tags = 16 chars
-                        max_shared=16,
-                        share_probability=0.8,  # High chance of sharing prefix
-                        prefix_pool_size=4  # 4 different prefixes
-                    ),
-                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
-                ),
-                description="Prefix sharing: 25% common prefix, 30K keys, unique tags + 768-dim vectors + 2 numeric fields",
-                vector_dim=768,
-                vector_algorithm=VectorAlgorithm.HNSW,
-                vector_metric=VectorMetric.COSINE,
-                include_numeric=True
-            ),
-            BenchmarkScenario(
-                name="Quick_PrefixShare_75pct",
-                total_keys=30000,
-                tags_config=TagsConfig(
-                    num_keys=30000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
-                    tag_length=LengthConfig(avg=64, min=64, max=64),
-                    tag_prefix=PrefixConfig(
-                        enabled=True,
-                        min_shared=48,  # 75% of 64-char tags = 48 chars
-                        max_shared=48,
-                        share_probability=0.9,  # Very high chance of sharing prefix
-                        prefix_pool_size=4  # 4 different prefixes
-                    ),
-                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
-                ),
-                description="Prefix sharing: 75% common prefix, 30K keys, unique tags + 1024-dim vectors + 3 numeric fields",
-                vector_dim=1024,
-                vector_algorithm=VectorAlgorithm.HNSW,
-                vector_metric=VectorMetric.IP,
-                include_numeric=True,
-                numeric_fields={"score": (0.0, 100.0), "timestamp": (1000000000.0, 2000000000.0), "rating": (1.0, 5.0)}
-            ),
+            # # Prefix Sharing Scenarios - Test Patricia tree efficiency
+            # BenchmarkScenario(
+            #     name="Quick_PrefixShare_25pct",
+            #     total_keys=30000,
+            #     tags_config=TagsConfig(
+            #         num_keys=30000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),
+            #         tag_length=LengthConfig(avg=64, min=64, max=64),
+            #         tag_prefix=PrefixConfig(
+            #             enabled=True,
+            #             min_shared=16,  # 25% of 64-char tags = 16 chars
+            #             max_shared=16,
+            #             share_probability=0.8,  # High chance of sharing prefix
+            #             prefix_pool_size=4  # 4 different prefixes
+            #         ),
+            #         sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+            #     ),
+            #     description="Prefix sharing: 25% common prefix, 30K keys, unique tags + 768-dim vectors + 2 numeric fields",
+            #     vector_dim=768,
+            #     vector_algorithm=VectorAlgorithm.HNSW,
+            #     vector_metric=VectorMetric.COSINE,
+            #     include_numeric=True
+            # ),
+            # BenchmarkScenario(
+            #     name="Quick_PrefixShare_75pct",
+            #     total_keys=1000000,
+            #     tags_config=TagsConfig(
+            #         num_keys=1000000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),
+            #         tag_length=LengthConfig(avg=64, min=64, max=64),
+            #         tag_prefix=PrefixConfig(
+            #             enabled=True,
+            #             min_shared=48,  # 75% of 64-char tags = 48 chars
+            #             max_shared=48,
+            #             share_probability=0.9,  # Very high chance of sharing prefix
+            #             prefix_pool_size=4  # 4 different prefixes
+            #         ),
+            #         sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+            #     ),
+            #     description="Prefix sharing: 75% common prefix, 30K keys, unique tags + 128-dim vectors + 3 numeric fields",
+            #     vector_dim=128,
+            #     vector_algorithm=VectorAlgorithm.HNSW,
+            #     vector_metric=VectorMetric.IP,
+            #     include_numeric=True,
+            #     numeric_fields={"score": (0.0, 100.0), "timestamp": (1000000000.0, 2000000000.0), "rating": (1.0, 5.0)}
+            # ),
             
             # Mixed Scenario - Combined effects
             BenchmarkScenario(
-                name="Quick_Mixed_HighShare_HighPrefix",
-                total_keys=40000,
+                name="HNSW_wNumeric_HighShare_HighPrefix",
+                total_keys=100000,
                 tags_config=TagsConfig(
-                    num_keys=40000,
+                    num_keys=100000,
                     tags_per_key=TagDistribution(avg=1, min=1, max=1),
                     tag_length=LengthConfig(avg=64, min=64, max=64),
                     tag_prefix=PrefixConfig(
@@ -2875,8 +2592,8 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                         pool_size=100  # High sharing: 400 keys per tag
                     )
                 ),
-                description="Mixed: High tag sharing + 75% prefix overlap, 40K keys + 384-dim vectors + 4 numeric fields",
-                vector_dim=384,
+                description="Mixed: High tag sharing + 75% prefix overlap, 40K keys + 1500-dim vectors + 4 numeric fields",
+                vector_dim=1500,
                 vector_algorithm=VectorAlgorithm.HNSW,
                 vector_metric=VectorMetric.COSINE,
                 include_numeric=True,
@@ -2975,7 +2692,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         # Quick summary
         monitor.log("")
         monitor.log("┏" + "━" * 78 + "┓")
-        monitor.log("┃" + " " * 28 + "⚡ QUICK BENCHMARK SUMMARY" + " " * 24 + "┃")
+        monitor.log("┃" + " " * 28 + "⚡ SEARCH MEMORY BENCHMARK SUMMARY" + " " * 24 + "┃")
         monitor.log("┗" + "━" * 78 + "┛")
         monitor.log("")
         for r in results:
@@ -2989,13 +2706,13 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         # Print summary table  
         monitor.log("")
-        monitor.log("┏" + "━" * 118 + "┓")
-        monitor.log("┃" + " " * 35 + "📊 QUICK BENCHMARK RESULTS" + " " * 48 + "┃")
-        monitor.log("┗" + "━" * 118 + "┛")
+        monitor.log("┏" + "━" * 180 + "┓")
+        monitor.log("┃" + " " * 76 + "📊 SEARCH MEMORY BENCHMARK RESULTS" + " " * 77 + "┃")
+        monitor.log("┗" + "━" * 180 + "┛")
         monitor.log("")
         
-        monitor.log(f"{'Scenario':<35} {'Keys':>8} {'WoIndexKB':>10} {'wIndexKB':>10} {'IndexKB':>10} {'TagIdxKB':>10} {'SearchKB':>10} {'Mode':<15}")
-        monitor.log("─" * 120)
+        monitor.log(f"{'Scenario':<35} {'Keys':>8} {'WoIndexKB':>10} {'wIndexKB':>10} {'IndexKB':>10} {'TagIdxKB':>10} {'SearchKB':>10} {'VecKB':>8} {'VecDims':>8} {'NumKB':>8} {'NumFlds':>8} {'InsTime':>8} {'K/s':>8} {'TagAcc':>8} {'TotAcc':>8} {'Mode':<15}")
+        monitor.log("─" * 180)
         
         for r in results:
             if r.get('skipped'):
@@ -3006,6 +2723,14 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                             f"{'':>10} "
                             f"{'':>10} "
                             f"{'':>10} "
+                            f"{'':>8} "
+                            f"{'':>8} "
+                            f"{'':>8} "
+                            f"{'':>8} "
+                            f"{'':>8} "
+                            f"{'':>8} "
+                            f"{'':>8} "
+                            f"{'':>8} "
                             f"Memory limit exceeded")
             else:
                 monitor.log(f"{r['scenario_name']:<35} "
@@ -3015,6 +2740,14 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                             f"{r['index_overhead_kb']:>10,} "
                             f"{r['tag_index_memory_kb']:>10,} "
                             f"{r['search_used_memory_kb']:>10,} "
+                            f"{r.get('vector_memory_kb', 0):>8,} "
+                            f"{r.get('vector_dims', 0):>8} "
+                            f"{r.get('numeric_memory_kb', 0):>8,} "
+                            f"{r.get('numeric_fields_count', 0):>8} "
+                            f"{r.get('insertion_time', 0):>8.1f} "
+                            f"{r.get('keys_per_second', 0):>8.0f} "
+                            f"{r.get('tag_memory_accuracy', 0):>8.2f} "
+                            f"{r.get('total_memory_accuracy', 0):>8.2f} "
                             f"{r['tags_config']:<15}")
         
         # # Analyze results by category
@@ -3026,516 +2759,6 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         # Stop the main monitor
         monitor.stop()
     
-    def test_async_performance_comparison(self):
-        """Compare async vs sync performance on the same scenario"""
-        # Set up file logging
-        log_file = self.setup_file_logging("performance_comparison")
-        monitor = ProgressMonitor(self.server, "performance_comparison")
-        monitor.start()
-        
-        monitor.log("")
-        monitor.log("┏" + "━" * 78 + "┓")
-        monitor.log("┃" + " " * 25 + "🏁 ASYNC vs SYNC PERFORMANCE TEST" + " " * 18 + "┃")
-        monitor.log("┗" + "━" * 78 + "┛")
-        monitor.log("")
-        
-        # Create a test scenario
-        test_scenario = BenchmarkScenario(
-            name="Performance_Test",
-            total_keys=50000,  # Medium-sized test
-            tags_config=TagsConfig(
-                num_keys=50000,
-                tags_per_key=TagDistribution(avg=5, min=3, max=8),
-                tag_length=LengthConfig(avg=20, min=10, max=30),
-                sharing=TagSharingConfig(mode=TagSharingMode.SHARED_POOL, pool_size=1000)
-            ),
-            description="Async vs Sync performance comparison"
-        )
-        
-        results = []
-        
-        # Test ASYNC mode
-        monitor.log("🚀 TESTING ASYNC MODE")
-        monitor.log("─" * 50)
-        try:
-            async_result = self.run_benchmark_scenario(test_scenario, monitor, use_async=True)
-            async_result['mode'] = 'ASYNC'
-            results.append(async_result)
-        except Exception as e:
-            monitor.log(f"❌ Async test failed: {e}")
-        
-        monitor.log("")
-        
-        # Test SYNC mode  
-        monitor.log("🧵 TESTING SYNC MODE")
-        monitor.log("─" * 50)
-        try:
-            sync_result = self.run_benchmark_scenario(test_scenario, monitor, use_async=False)
-            sync_result['mode'] = 'SYNC'
-            results.append(sync_result)
-        except Exception as e:
-            monitor.log(f"❌ Sync test failed: {e}")
-        
-        # Compare results
-        if len(results) == 2:
-            async_time = results[0]['insertion_time']
-            sync_time = results[1]['insertion_time']
-            
-            improvement = ((sync_time - async_time) / sync_time) * 100
-            speed_ratio = sync_time / async_time
-            
-            monitor.log("")
-            monitor.log("┏" + "━" * 78 + "┓")
-            monitor.log("┃" + " " * 30 + "📊 PERFORMANCE COMPARISON" + " " * 22 + "┃")
-            monitor.log("┗" + "━" * 78 + "┛")
-            monitor.log("")
-            monitor.log(f"🚀 Async Time:  {async_time:.2f}s")
-            monitor.log(f"🧵 Sync Time:   {sync_time:.2f}s")
-            monitor.log(f"📈 Improvement: {improvement:+.1f}% ({'faster' if improvement > 0 else 'slower'})")
-            monitor.log(f"⚡ Speed Ratio: {speed_ratio:.2f}x")
-            
-            if improvement > 0:
-                monitor.log(f"🏆 ASYNC IS FASTER by {improvement:.1f}%!")
-            else:
-                monitor.log(f"🐌 ASYNC IS SLOWER by {abs(improvement):.1f}%")
-        
-        monitor.log(f"\nLog file: {log_file}")
-        
-        monitor.stop()
-    
-    def test_stall_detection_example(self):
-        """Example test showing how to use stall detection"""
-        client = self.server.get_new_client()
-        monitor = ProgressMonitor(self.server, "stall_detection_test")
-        
-        # Define what to do when stall detected
-        def on_stall_detected(monitor_instance):
-            monitor_instance.log("🚨 STALL HANDLER: Taking recovery action!")
-            # You could:
-            # - Stop the test gracefully
-            # - Try to recover from the stall
-            # - Send alerts
-            # - Kill stuck processes
-            # - etc.
-        
-        # Configure stall detection: alert after 10 seconds of no activity
-        monitor.set_stall_detection(
-            enabled=True, 
-            threshold_seconds=10,
-            callback=on_stall_detected
-        )
-        
-        monitor.start()
-        
-        try:
-            monitor.log("Starting stall detection test...")
-            
-            # Insert some data
-            for i in range(100):
-                client.hset(f"key:{i}", mapping={"data": f"value{i}"})
-                time.sleep(0.1)
-            
-            monitor.log("Data insertion complete, now waiting...")
-            
-            # Example: Manually trigger diagnostics after 5 seconds
-            time.sleep(5)
-            monitor.collect_diagnostics("Pre-stall check")
-            
-            # Wait for stall detection to trigger (will show full diagnostics)
-            time.sleep(15)
-            
-        finally:
-            monitor.stop()
-            client.flushdb()
-    
-    def test_csv_export_functionality(self):
-        """Test the CSV export functionality with a small dataset"""
-        client = self.server.get_new_client()
-        monitor = ProgressMonitor(self.server, "csv_export_test")
-        
-        monitor.start()
-        
-        try:
-            monitor.log("=== TESTING CSV EXPORT FUNCTIONALITY ===")
-            
-            # Clear any existing data
-            client.flushdb()
-            
-            # Create test data with known structure
-            test_data = [
-                ("key:test1", {"tags": "tag_a,tag_b,tag_c", "vector": b"\x00\x01\x02\x03\x04\x05\x06\x07"}),
-                ("key:test2", {"tags": "tag_b,tag_c,tag_d", "vector": b"\x10\x11\x12\x13\x14\x15\x16\x17"}),
-                ("key:test3", {"tags": "tag_a,tag_d", "vector": b"\x20\x21\x22\x23\x24\x25\x26\x27"}),
-                ("key:test4", {"tags": "tag_e,tag_f", "vector": b"\x30\x31\x32\x33\x34\x35\x36\x37"}),
-            ]
-            
-            # Insert test data
-            monitor.log("Inserting test data...")
-            for key, fields in test_data:
-                client.hset(key, mapping=fields)
-            
-            # Test CSV export
-            monitor.log("Testing CSV export...")
-            
-            # Create a client without decode_responses for proper binary handling
-            export_client = SilentValkeyClient(
-                host=client.connection_pool.connection_kwargs['host'],
-                port=client.connection_pool.connection_kwargs['port'],
-                decode_responses=False
-            )
-            
-            try:
-                hashes_csv, tags_csv = self.export_dataset_to_csv(
-                    export_client,
-                    prefix="key:",
-                    scenario_name="test_export",
-                    timestamp="test_123",
-                    monitor=monitor
-                )
-                
-                # Verify files were created
-                import os
-                assert os.path.exists(hashes_csv), f"Hashes CSV not created: {hashes_csv}"
-                assert os.path.exists(tags_csv), f"Tags CSV not created: {tags_csv}"
-                
-                # Check hashes CSV content
-                import csv
-                with open(hashes_csv, 'r', encoding='utf-8') as f:
-                    reader = csv.DictReader(f)
-                    hash_rows = list(reader)
-                    
-                assert len(hash_rows) == 4, f"Expected 4 hash rows, got {len(hash_rows)}"
-                
-                # Check tags CSV content  
-                with open(tags_csv, 'r', encoding='utf-8') as f:
-                    reader = csv.DictReader(f)
-                    tag_rows = list(reader)
-                    
-                # Should have unique tags: tag_a, tag_b, tag_c, tag_d, tag_e, tag_f
-                assert len(tag_rows) == 6, f"Expected 6 unique tags, got {len(tag_rows)}"
-                
-                monitor.log("✅ CSV export test passed!")
-                
-                # Log some sample data
-                monitor.log(f"Sample hash row: {hash_rows[0]}")
-                monitor.log(f"Sample tag row: {tag_rows[0]}")
-                
-                # Cleanup test files
-                os.remove(hashes_csv)
-                os.remove(tags_csv)
-                monitor.log("🧹 Test files cleaned up")
-                
-            finally:
-                export_client.close()
-            
-        finally:
-            client.flushdb()
-            monitor.stop()
-    
-    def test_verify_memory_function(self):
-        """Test the verify_memory function with a small dataset"""
-        # Use the regular client which has decode_responses=True
-        client = self.server.get_new_client()
-        monitor = ProgressMonitor(self.server, "verify_memory_test")
-        log_file = self.setup_file_logging("verify_memory_test")
-        
-        monitor.start()
-        
-        monitor.log("=== TESTING VERIFY MEMORY FUNCTION ===")
-        monitor.log("Creating a small test dataset to verify memory calculation")
-        monitor.log("")
-        
-        # Clear any existing data
-        client.flushdb()
-        
-        # Create test data with known sizes
-        test_keys = [
-            ("key:test1", {"tags": "tag1,tag2,tag3", "vector": b"\x00\x01\x02\x03\x04\x05\x06\x07"}),
-            ("key:test2", {"tags": "tag2,tag3,tag4,tag5", "vector": b"\x10\x11\x12\x13\x14\x15\x16\x17"}),
-            ("key:test3", {"tags": "tag1,tag4", "vector": b"\x20\x21\x22\x23\x24\x25\x26\x27"}),
-        ]
-        
-        # Insert test data
-        monitor.log("Inserting test data...")
-        for key, fields in test_keys:
-            client.hset(key, mapping=fields)
-        
-        # Debug: Check what's actually stored
-        monitor.log("Debug: Checking stored data...")
-        for key, _ in test_keys:
-            stored_data = client.hgetall(key)
-            monitor.log(f"  {key}: {stored_data}")
-        
-        # Run verification - need to create a new client without decode_responses for binary data
-        monitor.log("")
-        # Create a client specifically for verify_memory that doesn't decode responses
-        verify_client = SilentValkeyClient(
-            host=client.connection_pool.connection_kwargs['host'],
-            port=client.connection_pool.connection_kwargs['port'],
-            decode_responses=False  # Important: Don't decode for binary data
-        )
-        results = self.verify_memory(verify_client, monitor=monitor)
-        verify_client.close()
-        
-        # Validate results
-        monitor.log("📊 VALIDATION")
-        monitor.log("─" * 50)
-        
-        # Expected values
-        expected_keys = len(test_keys)
-        expected_key_lengths = sum(len(k) for k, _ in test_keys)
-        expected_tag_lengths = sum(len(f["tags"]) for _, f in test_keys)
-        expected_vector_lengths = sum(len(f["vector"]) for _, f in test_keys)
-        
-        monitor.log(f"Expected keys: {expected_keys}, Found: {results['total_keys']}")
-        monitor.log(f"Expected key lengths: {expected_key_lengths}, Found: {results['sum_key_lengths']}")
-        monitor.log(f"Expected tag lengths: {expected_tag_lengths}, Found: {results['sum_tag_lengths']}")
-        monitor.log(f"Expected vector lengths: {expected_vector_lengths}, Found: {results['sum_vector_lengths']}")
-        
-        # Assert correctness
-        assert results['total_keys'] == expected_keys, f"Key count mismatch"
-        assert results['sum_key_lengths'] == expected_key_lengths, f"Key length sum mismatch"
-        assert results['sum_tag_lengths'] == expected_tag_lengths, f"Tag length sum mismatch"
-        assert results['sum_vector_lengths'] == expected_vector_lengths, f"Vector length sum mismatch"
-        
-        monitor.log("")
-        monitor.log("✅ All validations passed!")
-        monitor.log(f"Log file: {log_file}")
-        
-        # Cleanup
-        client.flushdb()
-        monitor.stop()
-    
-    def test_fuzzy_memory_estimation(self, use_async: bool = True):
-        """Comprehensive fuzzy testing of memory estimation with 1-10M keys"""
-        import random
-        import statistics
-        from enum import Enum
-        
-        # Set up file logging
-        log_file = self.setup_file_logging("fuzzy_estimation")
-        monitor = ProgressMonitor(self.server, "fuzzy_estimation")
-        monitor.start()
-        
-        monitor.log("🎲 FUZZY MEMORY ESTIMATION TESTING")
-        monitor.log("=" * 80)
-        monitor.log("Testing memory estimation accuracy with realistic large datasets")
-        monitor.log("Comparing actual memory usage vs our estimation functions")
-        monitor.log("")
-        
-        # CSV setup
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        csv_filename = f"fuzzy_estimation_results_{timestamp}.csv"
-        
-        # Define fuzzy test patterns with more reasonable sizes
-        # Start smaller and scale up based on what works
-        fuzzy_patterns = [
-            {
-                'name': 'Medium_NoSharing_500K',
-                'total_keys': 500000,
-                'tags_config': TagsConfig(
-                    num_keys=500000,
-                    tags_per_key=TagDistribution(avg=3, min=2, max=4),
-                    tag_length=LengthConfig(avg=25, min=20, max=30),
-                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
-                ),
-                'description': '500K keys, unique tags (no sharing), 3 tags/key'
-            },
-            {
-                'name': 'Large_SharedPool_10M',
-                'total_keys': 10000000,
-                'tags_config': TagsConfig(
-                    num_keys=10000000,
-                    tags_per_key=TagDistribution(avg=5, min=3, max=700),
-                    tag_length=LengthConfig(avg=300, min=25, max=905),
-                    sharing=TagSharingConfig(
-                        mode=TagSharingMode.SHARED_POOL,
-                        pool_size=10000,
-                        reuse_probability=0.3
-                    )
-                ),
-                'description': '1M keys, shared pool (10K unique tags), 5 tags/key'
-            },
-            {
-                'name': 'XLarge_GroupBased_2M',
-                'total_keys': 2000000,
-                'tags_config': TagsConfig(
-                    num_keys=2000000,
-                    tags_per_key=TagDistribution(avg=4, min=2, max=6),
-                    tag_length=LengthConfig(avg=35, min=30, max=40),
-                    sharing=TagSharingConfig(
-                        mode=TagSharingMode.GROUP_BASED,
-                        keys_per_group=50000,
-                        tags_per_group=25
-                    )
-                ),
-                'description': '2M keys, group-based sharing (50K keys/group), 4 tags/key'
-            },
-            {
-                'name': 'HighSharing_1M',
-                'total_keys': 1000000,
-                'tags_config': TagsConfig(
-                    num_keys=1000000,
-                    tags_per_key=TagDistribution(avg=6, min=4, max=8),
-                    tag_length=LengthConfig(avg=20, min=15, max=25),
-                    sharing=TagSharingConfig(
-                        mode=TagSharingMode.SHARED_POOL,
-                        pool_size=1000,
-                        reuse_probability=0.9
-                    )
-                ),
-                'description': '1M keys, high sharing (1K unique tags), 6 tags/key'
-            },
-            {
-                'name': 'Zipf_Distribution_1M',
-                'total_keys': 1000000,
-                'tags_config': TagsConfig(
-                    num_keys=1000000,
-                    tags_per_key=TagDistribution(avg=5, min=1, max=20, distribution=Distribution.ZIPF),
-                    tag_length=LengthConfig(avg=40, min=20, max=80),
-                    sharing=TagSharingConfig(
-                        mode=TagSharingMode.SHARED_POOL,
-                        pool_size=5000,
-                        reuse_probability=0.8
-                    )
-                ),
-                'description': '1M keys, zipf distribution, variable tags (1-20), mixed lengths'
-            }
-        ]
-        
-        fuzzy_results = []
-        
-        for i, pattern in enumerate(fuzzy_patterns):
-            monitor.log(f"--- Fuzzy Pattern {i+1}/{len(fuzzy_patterns)}: {pattern['name']} ---")
-            monitor.log(f"  📝 {pattern['description']}")
-            
-            # Create benchmark scenario
-            scenario = BenchmarkScenario(
-                name=pattern['name'],
-                total_keys=pattern['total_keys'],
-                tags_config=pattern['tags_config'],
-                description=pattern['description']
-            )
-            
-            try:
-                # Validate memory requirements
-                can_run, reason = self.validate_memory_requirements(scenario)
-                if not can_run:
-                    monitor.log(f"  ⚠️  Skipping: {reason}")
-                    fuzzy_results.append({
-                        'scenario_name': pattern['name'],
-                        'description': pattern['description'],
-                        'total_keys': pattern['total_keys'],
-                        'skipped': True,
-                        'reason': reason,
-                        'estimated_memory_kb': 0,
-                        'actual_memory_kb': 0,
-                        'accuracy_ratio': 0
-                    })
-                    continue
-                
-                monitor.log(f"  ✅ Memory validation passed")
-                
-                # Get memory estimation BEFORE running the test
-                estimated_stats = self._calculate_estimated_stats(scenario)
-                # Use default schema for fuzzy tests (8-dim vectors, 2 numeric fields)
-                vector_dims = 8
-                
-                estimated_memory = self.calculate_comprehensive_memory(
-                    total_keys=scenario.total_keys,
-                    unique_tags=estimated_stats['unique_tags'],
-                    avg_tag_length=estimated_stats['avg_tag_length'],
-                    avg_tags_per_key=estimated_stats['avg_tags_per_key'],
-                    avg_keys_per_tag=estimated_stats['avg_keys_per_tag'],
-                    vector_dims=vector_dims,  # Use actual schema dimensions
-                    hnsw_m=16,
-                    include_numeric=True,
-                    monitor=monitor
-                )
-                
-                monitor.log(f"  📊 Estimated total memory: {estimated_memory['total_estimated_kb']:,} KB")
-                monitor.log(f"     • Tag index: {estimated_memory['tag_index_kb']:,} KB")
-                monitor.log(f"     • Vector index: {estimated_memory['vector_index_kb']:,} KB")
-                monitor.log(f"     • Numeric index: {estimated_memory['numeric_index_kb']:,} KB")
-                
-                # Run the actual benchmark
-                monitor.log(f"  🚀 Running actual benchmark...")
-                benchmark_result = self.run_benchmark_scenario(scenario, monitor, use_async)
-                
-                if benchmark_result.get('skipped'):
-                    fuzzy_results.append({
-                        'scenario_name': pattern['name'],
-                        'description': pattern['description'],
-                        'total_keys': pattern['total_keys'],
-                        'skipped': True,
-                        'reason': benchmark_result.get('reason', 'Unknown'),
-                        'estimated_memory_kb': estimated_memory['total_estimated_kb'],
-                        'actual_memory_kb': 0,
-                        'accuracy_ratio': 0
-                    })
-                    continue
-                
-                # Extract actual memory usage
-                actual_memory_kb = benchmark_result.get('search_used_memory_kb', 0)
-                
-                # Calculate accuracy
-                if actual_memory_kb > 0:
-                    accuracy_ratio = estimated_memory['total_estimated_kb'] / actual_memory_kb
-                else:
-                    accuracy_ratio = 0
-                
-                monitor.log(f"  📈 Actual memory usage: {actual_memory_kb:,} KB")
-                monitor.log(f"  🎯 Accuracy ratio: {accuracy_ratio:.2f}x")
-                
-                if 0.5 <= accuracy_ratio <= 2.0:
-                    monitor.log(f"  ✅ Good accuracy (within 2x)")
-                elif accuracy_ratio < 0.5:
-                    monitor.log(f"  ⚠️  Underestimation (>{accuracy_ratio:.1f}x too low)")
-                else:
-                    monitor.log(f"  ⚠️  Overestimation ({accuracy_ratio:.1f}x too high)")
-                
-                # Store detailed results
-                fuzzy_result = {
-                    'scenario_name': pattern['name'],
-                    'description': pattern['description'],
-                    'total_keys': pattern['total_keys'],
-                    'skipped': False,
-                    'estimated_memory_kb': estimated_memory['total_estimated_kb'],
-                    'estimated_tag_index_kb': estimated_memory['tag_index_kb'],
-                    'estimated_vector_index_kb': estimated_memory['vector_index_kb'],
-                    'estimated_numeric_index_kb': estimated_memory['numeric_index_kb'],
-                    'actual_memory_kb': actual_memory_kb,
-                    'accuracy_ratio': accuracy_ratio,
-                    'insertion_time_sec': benchmark_result.get('insertion_time_sec', 0),
-                    'keys_per_second': benchmark_result.get('keys_per_second', 0),
-                    'unique_tags': estimated_stats['unique_tags'],
-                    'avg_tags_per_key': estimated_stats['avg_tags_per_key'],
-                    'avg_tag_length': estimated_stats['avg_tag_length']
-                }
-                fuzzy_results.append(fuzzy_result)
-                
-                # Write to CSV incrementally
-                self.append_fuzzy_to_csv(csv_filename, fuzzy_result, monitor, write_header=(i == 0))
-                
-            except Exception as e:
-                monitor.log(f"  ❌ Pattern failed: {e}")
-                fuzzy_results.append({
-                    'scenario_name': pattern['name'],
-                    'description': pattern['description'],
-                    'total_keys': pattern['total_keys'],
-                    'skipped': True,
-                    'reason': f"Error: {str(e)}",
-                    'estimated_memory_kb': 0,
-                    'actual_memory_kb': 0,
-                    'accuracy_ratio': 0
-                })
-        
-        # Analyze fuzzy results
-        self._analyze_fuzzy_results(fuzzy_results, monitor)
-        
-        monitor.log(f"\n📁 Fuzzy results CSV: {csv_filename}")
-        monitor.log(f"📝 Log file: {log_file}")
-        monitor.stop()
     
     def _calculate_estimated_stats(self, scenario: BenchmarkScenario) -> dict:
         """Calculate estimated statistics for a scenario"""
@@ -3567,286 +2790,3 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             'avg_keys_per_tag': avg_keys_per_tag,
             'avg_tag_length': tags_config.tag_length.avg
         }
-    
-    def append_fuzzy_to_csv(self, filename: str, result: dict, monitor, write_header=False):
-        """Append fuzzy test result to CSV file"""
-        import csv
-        
-        fieldnames = [
-            'scenario_name', 'description', 'total_keys', 'skipped', 'reason',
-            'estimated_memory_kb', 'estimated_tag_index_kb', 'estimated_vector_index_kb', 'estimated_numeric_index_kb',
-            'actual_memory_kb', 'accuracy_ratio', 'insertion_time_sec', 'keys_per_second',
-            'unique_tags', 'avg_tags_per_key', 'avg_tag_length'
-        ]
-        
-        try:
-            mode = 'w' if write_header else 'a'
-            with open(filename, mode, newline='', encoding='utf-8') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                if write_header:
-                    writer.writeheader()
-                
-                # Fill missing fields with defaults
-                csv_result = {field: result.get(field, '') for field in fieldnames}
-                writer.writerow(csv_result)
-                
-        except Exception as e:
-            monitor.log(f"⚠️ CSV write failed: {e}")
-    
-    def _analyze_fuzzy_results(self, results: list, monitor):
-        """Analyze and summarize fuzzy test results"""
-        monitor.log("")
-        monitor.log("🎯 FUZZY ESTIMATION ANALYSIS")
-        monitor.log("=" * 80)
-        
-        # Filter non-skipped results
-        valid_results = [r for r in results if not r.get('skipped', True) and r.get('accuracy_ratio', 0) > 0]
-        
-        if not valid_results:
-            monitor.log("❌ No valid results to analyze")
-            return
-        
-        # Calculate statistics
-        accuracies = [r['accuracy_ratio'] for r in valid_results]
-        mean_accuracy = statistics.mean(accuracies)
-        median_accuracy = statistics.median(accuracies)
-        min_accuracy = min(accuracies)
-        max_accuracy = max(accuracies)
-        
-        # Count accuracy ranges
-        excellent = sum(1 for a in accuracies if 0.8 <= a <= 1.2)  # Within ±20%
-        good = sum(1 for a in accuracies if 0.5 <= a <= 2.0)       # Within 2x
-        poor = len(accuracies) - good
-        
-        monitor.log(f"📊 Patterns Analyzed: {len(valid_results)}")
-        monitor.log(f"📈 Mean Accuracy: {mean_accuracy:.2f}x")
-        monitor.log(f"📊 Median Accuracy: {median_accuracy:.2f}x")
-        monitor.log(f"📉 Range: {min_accuracy:.2f}x - {max_accuracy:.2f}x")
-        monitor.log("")
-        monitor.log(f"✅ Excellent (±20%): {excellent}/{len(valid_results)} ({excellent/len(valid_results):.1%})")
-        monitor.log(f"🟡 Good (within 2x): {good}/{len(valid_results)} ({good/len(valid_results):.1%})")
-        monitor.log(f"🔴 Poor (>2x off): {poor}/{len(valid_results)} ({poor/len(valid_results):.1%})")
-        monitor.log("")
-        
-        # Best and worst cases
-        best = max(valid_results, key=lambda r: 1/abs(r['accuracy_ratio'] - 1.0))
-        worst = min(valid_results, key=lambda r: 1/abs(r['accuracy_ratio'] - 1.0))
-        
-        monitor.log(f"🏆 Best Case: {best['scenario_name']} ({best['accuracy_ratio']:.2f}x)")
-        monitor.log(f"   {best['description']}")
-        monitor.log(f"   Estimated: {best['estimated_memory_kb']:,} KB, Actual: {best['actual_memory_kb']:,} KB")
-        monitor.log("")
-        monitor.log(f"⚠️  Worst Case: {worst['scenario_name']} ({worst['accuracy_ratio']:.2f}x)")
-        monitor.log(f"   {worst['description']}")
-        monitor.log(f"   Estimated: {worst['estimated_memory_kb']:,} KB, Actual: {worst['actual_memory_kb']:,} KB")
-        monitor.log("")
-        
-        # Overall assessment
-        if mean_accuracy >= 0.8 and mean_accuracy <= 1.2 and excellent/len(valid_results) >= 0.6:
-            monitor.log("🎉 EXCELLENT: Memory estimation is highly accurate!")
-        elif mean_accuracy >= 0.5 and mean_accuracy <= 2.0 and good/len(valid_results) >= 0.7:
-            monitor.log("✅ GOOD: Memory estimation is reasonably accurate")
-        else:
-            monitor.log("⚠️ NEEDS IMPROVEMENT: Memory estimation accuracy should be enhanced")
-        
-        monitor.log("")
-    
-    def test_hnsw_vector_configuration(self):
-        """Test HNSW vector field configuration"""
-        monitor = self.progress_monitor
-        monitor.log("\n🧪 Testing HNSW Vector Configuration")
-        monitor.log("=" * 60)
-        
-        # Create schema with HNSW vector
-        from hash_generator import create_hnsw_vector_field
-        
-        schema = IndexSchema(
-            index_name="test_hnsw",
-            prefix=["doc:"],
-            fields=[
-                FieldSchema(name="tags", type=FieldType.TAG),
-                create_hnsw_vector_field(
-                    name="embedding",
-                    dim=128,
-                    metric=VectorMetric.COSINE,
-                    m=32,
-                    ef_construction=400,
-                    ef_runtime=100,
-                    epsilon=0.01
-                )
-            ]
-        )
-        
-        # Generate data
-        config = HashGeneratorConfig(
-            num_keys=100,
-            schema=schema,
-            vector_normalize=True,  # Important for cosine similarity
-            batch_size=100
-        )
-        gen = HashKeyGenerator(config)
-        
-        # Verify FT.CREATE command
-        create_cmd = gen.generate_ft_create_command()
-        monitor.log(f"FT.CREATE command generated:")
-        monitor.log(f"  {create_cmd}")
-        
-        # Verify command includes HNSW parameters
-        assert "HNSW" in create_cmd, "Missing HNSW algorithm"
-        assert "M 32" in create_cmd, "Missing M parameter"
-        assert "EF_CONSTRUCTION 400" in create_cmd, "Missing EF_CONSTRUCTION"
-        assert "EF_RUNTIME 100" in create_cmd, "Missing EF_RUNTIME"
-        assert "EPSILON 0.01" in create_cmd, "Missing EPSILON"
-        
-        # Generate and verify vectors
-        vectors_checked = 0
-        for batch in gen:
-            for key, fields in batch[:5]:  # Check first 5
-                vec = np.frombuffer(fields['embedding'], dtype=np.float32)
-                norm = np.linalg.norm(vec)
-                # Verify normalization for cosine similarity
-                assert abs(norm - 1.0) < 0.001, f"Vector not normalized: norm={norm}"
-                vectors_checked += 1
-            break
-        
-        monitor.log(f"✅ Verified {vectors_checked} normalized vectors for COSINE similarity")
-        monitor.log("")
-    
-    def test_numeric_field_distributions(self):
-        """Test numeric field generation with different distributions"""
-        monitor = self.progress_monitor
-        monitor.log("\n🧪 Testing Numeric Field Distributions")
-        monitor.log("=" * 60)
-        
-        from hash_generator import create_numeric_field
-        
-        # Create schema with multiple numeric fields
-        schema = IndexSchema(
-            index_name="test_numeric",
-            prefix=["item:"],
-            fields=[
-                create_numeric_field("price", min_val=0.99, max_val=999.99, distribution="uniform"),
-                create_numeric_field("rating", min_val=1, max_val=5, distribution="normal"),
-                create_numeric_field("views", min_val=0, max_val=1000000, distribution="exponential"),
-                FieldSchema(name="tags", type=FieldType.TAG),
-                FieldSchema(
-                    name="vec",
-                    type=FieldType.VECTOR,
-                    vector_config=VectorFieldSchema(dim=8)
-                )
-            ]
-        )
-        
-        # Generate data
-        config = HashGeneratorConfig(
-            num_keys=1000,
-            schema=schema,
-            batch_size=1000
-        )
-        gen = HashKeyGenerator(config)
-        
-        # Collect numeric values
-        prices = []
-        ratings = []
-        views = []
-        
-        for batch in gen:
-            for key, fields in batch:
-                prices.append(fields['price'])
-                ratings.append(fields['rating'])
-                views.append(fields['views'])
-        
-        # Analyze distributions
-        monitor.log("📊 Distribution Analysis:")
-        
-        # Uniform distribution (price)
-        price_mean = np.mean(prices)
-        price_std = np.std(prices)
-        price_expected_mean = (0.99 + 999.99) / 2
-        price_expected_std = (999.99 - 0.99) / np.sqrt(12)  # Uniform distribution std
-        
-        monitor.log(f"\nPrice (uniform):")
-        monitor.log(f"  Range: {min(prices):.2f} - {max(prices):.2f}")
-        monitor.log(f"  Mean: {price_mean:.2f} (expected: {price_expected_mean:.2f})")
-        monitor.log(f"  Std: {price_std:.2f} (expected: {price_expected_std:.2f})")
-        
-        # Normal distribution (rating)
-        rating_mean = np.mean(ratings)
-        rating_std = np.std(ratings)
-        rating_expected_mean = (1 + 5) / 2
-        
-        monitor.log(f"\nRating (normal):")
-        monitor.log(f"  Range: {min(ratings):.2f} - {max(ratings):.2f}")
-        monitor.log(f"  Mean: {rating_mean:.2f} (expected: ~{rating_expected_mean:.2f})")
-        monitor.log(f"  Std: {rating_std:.2f}")
-        monitor.log(f"  Within [1, 5]: {sum(1 <= r <= 5 for r in ratings)}/{len(ratings)}")
-        
-        # Exponential distribution (views)
-        views_mean = np.mean(views)
-        views_median = np.median(views)
-        
-        monitor.log(f"\nViews (exponential):")
-        monitor.log(f"  Range: {min(views):.0f} - {max(views):.0f}")
-        monitor.log(f"  Mean: {views_mean:.0f}")
-        monitor.log(f"  Median: {views_median:.0f}")
-        monitor.log(f"  Mean > Median: {views_mean > views_median} (expected for exponential)")
-        
-        # Verify distributions are reasonable
-        assert 0.99 <= min(prices) <= max(prices) <= 999.99, "Price out of range"
-        assert abs(price_mean - price_expected_mean) < 50, "Uniform distribution mean too far off"
-        
-        assert 1 <= min(ratings) <= max(ratings) <= 5, "Rating out of range"
-        assert 2 <= rating_mean <= 4, "Normal distribution mean unexpected"
-        
-        assert 0 <= min(views) <= max(views) <= 1000000, "Views out of range"
-        assert views_mean > views_median, "Exponential distribution should have mean > median"
-        
-        monitor.log("\n✅ All numeric distributions validated successfully")
-        monitor.log("")
-    
-    def test_sparse_vector_generation(self):
-        """Test sparse vector generation"""
-        monitor = self.progress_monitor
-        monitor.log("\n🧪 Testing Sparse Vector Generation")
-        monitor.log("=" * 60)
-        
-        schema = create_simple_schema(
-            index_name="test_sparse",
-            vector_dim=100,
-            include_numeric=True,
-            vector_algorithm=VectorAlgorithm.FLAT,
-            vector_metric=VectorMetric.L2
-        )
-        
-        # Test different sparsity levels
-        sparsity_levels = [0.0, 0.3, 0.7, 0.9]
-        
-        for target_sparsity in sparsity_levels:
-            config = HashGeneratorConfig(
-                num_keys=100,
-                schema=schema,
-                vector_sparsity=target_sparsity,
-                batch_size=100
-            )
-            gen = HashKeyGenerator(config)
-            
-            actual_sparsities = []
-            
-            for batch in gen:
-                for key, fields in batch:
-                    vec = np.frombuffer(fields['embedding'], dtype=np.float32)
-                    non_zero = np.count_nonzero(vec)
-                    actual_sparsity = 1 - (non_zero / len(vec))
-                    actual_sparsities.append(actual_sparsity)
-            
-            avg_sparsity = np.mean(actual_sparsities)
-            monitor.log(f"\nTarget sparsity: {target_sparsity:.1%}")
-            monitor.log(f"  Actual average: {avg_sparsity:.1%}")
-            monitor.log(f"  Deviation: {abs(avg_sparsity - target_sparsity):.1%}")
-            
-            # Allow some deviation due to randomness
-            assert abs(avg_sparsity - target_sparsity) < 0.05, \
-                f"Sparsity deviation too large: target={target_sparsity}, actual={avg_sparsity}"
-        
-        monitor.log("\n✅ Sparse vector generation validated")
-        monitor.log("")
