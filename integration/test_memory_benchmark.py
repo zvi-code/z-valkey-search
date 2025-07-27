@@ -16,9 +16,11 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Iterator, Any, Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from enum import Enum
 from collections import Counter, defaultdict
 import json
 import numpy as np
+import random
 
 try:
     import psutil
@@ -565,6 +567,165 @@ class DistributionCollector:
         }
 
 
+class WorkloadType(Enum):
+    """Types of workload operations"""
+    DELETE = "del"
+    QUERY = "query"
+    INSERT = "insert"
+    OVERWRITE = "overwrite"
+
+@dataclass
+class WorkloadOperation:
+    """Single workload operation within a stage"""
+    type: WorkloadType
+    target_value: float = None  # For percentage-based operations (0.0-1.0)
+    duration_seconds: int = None  # For time-based operations
+    
+    def __str__(self):
+        if self.target_value is not None:
+            if self.type in [WorkloadType.DELETE, WorkloadType.INSERT]:
+                return f"{self.type.value}:{self.target_value*100:.0f}%"
+            else:
+                return f"{self.type.value}:{self.target_value:.0f}%"
+        elif self.duration_seconds is not None:
+            return f"{self.type.value}:{self.duration_seconds}s"
+        else:
+            return self.type.value
+
+@dataclass
+class WorkloadStage:
+    """A stage containing one or more parallel operations"""
+    name: str
+    operations: List[WorkloadOperation]
+    duration_seconds: int = None  # Optional stage duration override
+    
+    def __str__(self):
+        ops_str = "+".join(str(op) for op in self.operations)
+        if self.duration_seconds:
+            return f"{self.name}[{ops_str}]:{self.duration_seconds}s"
+        return f"{self.name}[{ops_str}]"
+
+class WorkloadParser:
+    """Parser for workload stage descriptions"""
+    
+    @staticmethod
+    def parse_workload_string(workload_str: str) -> List[WorkloadStage]:
+        """
+        Parse workload string like:
+        "del:50%,query+insert:80%,query:5min,query+del:50%,insert:100%,overwrite:10%:1min"
+        
+        Returns list of WorkloadStage objects
+        """
+        stages = []
+        stage_strings = workload_str.split(',')
+        
+        for i, stage_str in enumerate(stage_strings):
+            stage_str = stage_str.strip()
+            stage_name = f"stage_{i+1}"
+            operations = []
+            stage_duration = None
+            
+            # Check if stage has explicit duration at the end
+            if ':' in stage_str and (stage_str.endswith('min') or stage_str.endswith('s')):
+                parts = stage_str.rsplit(':', 1)
+                stage_str = parts[0]
+                duration_str = parts[1]
+                stage_duration = WorkloadParser._parse_duration(duration_str)
+            
+            # Parse parallel operations (separated by +)
+            op_strings = stage_str.split('+')
+            
+            for op_str in op_strings:
+                op_str = op_str.strip()
+                operation = WorkloadParser._parse_operation(op_str)
+                if operation:
+                    operations.append(operation)
+            
+            if operations:
+                stages.append(WorkloadStage(
+                    name=stage_name,
+                    operations=operations,
+                    duration_seconds=stage_duration
+                ))
+        
+        return stages
+    
+    @staticmethod
+    def _parse_operation(op_str: str) -> Optional[WorkloadOperation]:
+        """Parse a single operation string like 'del:50%' or 'query:5min'"""
+        if ':' not in op_str:
+            # Simple operation without parameters
+            op_type = WorkloadParser._get_workload_type(op_str)
+            if op_type:
+                return WorkloadOperation(type=op_type)
+            return None
+        
+        parts = op_str.split(':', 1)
+        op_name = parts[0].strip()
+        op_value = parts[1].strip()
+        
+        op_type = WorkloadParser._get_workload_type(op_name)
+        if not op_type:
+            return None
+        
+        # Parse value
+        if op_value.endswith('%'):
+            # Percentage value
+            try:
+                percentage = float(op_value[:-1]) / 100.0
+                return WorkloadOperation(type=op_type, target_value=percentage)
+            except ValueError:
+                return None
+        elif op_value.endswith('min') or op_value.endswith('s'):
+            # Duration value
+            duration = WorkloadParser._parse_duration(op_value)
+            if duration:
+                return WorkloadOperation(type=op_type, duration_seconds=duration)
+        else:
+            # Try to parse as raw number (assume percentage)
+            try:
+                value = float(op_value)
+                # If > 1, assume it's a percentage, otherwise a fraction
+                if value > 1:
+                    value = value / 100.0
+                return WorkloadOperation(type=op_type, target_value=value)
+            except ValueError:
+                return None
+        
+        return None
+    
+    @staticmethod
+    def _get_workload_type(name: str) -> Optional[WorkloadType]:
+        """Convert string to WorkloadType enum"""
+        name = name.lower().strip()
+        for wt in WorkloadType:
+            if wt.value == name:
+                return wt
+        # Also support full names
+        if name == "delete":
+            return WorkloadType.DELETE
+        elif name == "query":
+            return WorkloadType.QUERY
+        elif name == "insert":
+            return WorkloadType.INSERT
+        elif name == "overwrite":
+            return WorkloadType.OVERWRITE
+        return None
+    
+    @staticmethod
+    def _parse_duration(duration_str: str) -> Optional[int]:
+        """Parse duration string to seconds"""
+        duration_str = duration_str.strip()
+        try:
+            if duration_str.endswith('min'):
+                return int(float(duration_str[:-3]) * 60)
+            elif duration_str.endswith('s'):
+                return int(float(duration_str[:-1]))
+            else:
+                return int(float(duration_str))
+        except ValueError:
+            return None
+
 @dataclass
 class BenchmarkScenario:
     """Configuration for a benchmark scenario"""
@@ -583,6 +744,14 @@ class BenchmarkScenario:
         "score": (0.0, 100.0),
         "timestamp": (1000000000.0, 2000000000.0)
     })
+    # Workload stages configuration
+    workload_stages: List[WorkloadStage] = field(default_factory=list)
+    workload_string: str = None  # Raw workload string to parse
+    
+    def __post_init__(self):
+        """Parse workload string if provided"""
+        if self.workload_string and not self.workload_stages:
+            self.workload_stages = WorkloadParser.parse_workload_string(self.workload_string)
 
 
 
@@ -2935,6 +3104,22 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 }, f, indent=2)
             monitor.log(f"  Distribution details saved to {dist_filename}")
             
+            # Execute workload stages if defined
+            workload_results = {}
+            if scenario.workload_stages:
+                workload_results = self.execute_workload_stages(
+                    client, scenario, index_name, generator, monitor, scenario.total_keys
+                )
+                
+                # Add workload results to the main result
+                result['workload_stages'] = workload_results.get('stages', [])
+                result['workload_final_key_count'] = workload_results.get('final_key_count', current_key_count)
+                result['workload_deleted_keys'] = workload_results.get('deleted_keys_count', 0)
+                
+                # Get final memory state after workload
+                final_workload_memory = get_memory_info_summary(client)
+                result['workload_final_memory_kb'] = final_workload_memory['used_memory'] // 1024
+            
             # Cleanup
             client.execute_command("FT.DROPINDEX", index_name)
             
@@ -2962,6 +3147,328 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 monitor.stop()
         
         return result
+    
+    def execute_workload_stages(self, client, scenario: BenchmarkScenario, index_name: str, 
+                               generator: HashKeyGenerator, monitor: ProgressMonitor, 
+                               initial_keys: int) -> Dict[str, Any]:
+        """Execute workload stages with multi-threaded operations"""
+        if not scenario.workload_stages:
+            return {}
+        
+        monitor.log("")
+        monitor.log("🔄 WORKLOAD EXECUTION PHASE")
+        monitor.log("─" * 50)
+        monitor.log(f"📊 Stages: {len(scenario.workload_stages)}")
+        
+        # Track all keys for operations
+        all_keys = self.get_all_keys(client, prefix="key:")
+        current_key_count = len(all_keys)
+        deleted_keys = set()
+        stage_results = []
+        
+        for stage_idx, stage in enumerate(scenario.workload_stages):
+            monitor.log("")
+            monitor.log(f"▶️  STAGE {stage_idx + 1}: {stage.name}")
+            monitor.log(f"   Operations: {', '.join(str(op) for op in stage.operations)}")
+            
+            stage_start_time = time.time()
+            stage_metrics = {
+                'stage_name': stage.name,
+                'operations': [str(op) for op in stage.operations],
+                'start_key_count': current_key_count,
+                'start_memory': get_memory_info_summary(client)
+            }
+            
+            # Execute operations in parallel
+            operation_results = self.execute_parallel_operations(
+                client, stage, all_keys, deleted_keys, current_key_count, 
+                initial_keys, index_name, generator, monitor
+            )
+            
+            # Update state after stage
+            all_keys = self.get_all_keys(client, prefix="key:")
+            current_key_count = len(all_keys)
+            
+            stage_end_time = time.time()
+            stage_metrics.update({
+                'end_key_count': current_key_count,
+                'end_memory': get_memory_info_summary(client),
+                'duration_seconds': stage_end_time - stage_start_time,
+                'operation_results': operation_results
+            })
+            
+            # Log stage summary
+            monitor.log(f"   ✅ Stage complete:")
+            monitor.log(f"      Keys: {stage_metrics['start_key_count']:,} → {stage_metrics['end_key_count']:,}")
+            monitor.log(f"      Memory: {stage_metrics['start_memory']['used_memory'] // (1024**2):,} MB → "
+                       f"{stage_metrics['end_memory']['used_memory'] // (1024**2):,} MB")
+            monitor.log(f"      Duration: {stage_metrics['duration_seconds']:.1f}s")
+            
+            stage_results.append(stage_metrics)
+        
+        return {
+            'stages': stage_results,
+            'total_stages': len(scenario.workload_stages),
+            'final_key_count': current_key_count,
+            'deleted_keys_count': len(deleted_keys)
+        }
+    
+    def execute_parallel_operations(self, client, stage: WorkloadStage, all_keys: List[str], 
+                                   deleted_keys: Set[str], current_key_count: int, 
+                                   initial_keys: int, index_name: str, 
+                                   generator: HashKeyGenerator, monitor: ProgressMonitor) -> List[Dict]:
+        """Execute multiple operations in parallel within a stage"""
+        operation_results = []
+        threads = []
+        
+        for operation in stage.operations:
+            if operation.type == WorkloadType.DELETE:
+                thread = threading.Thread(
+                    target=self._execute_delete_operation,
+                    args=(client, operation, all_keys, deleted_keys, 
+                          current_key_count, monitor, operation_results)
+                )
+            elif operation.type == WorkloadType.QUERY:
+                thread = threading.Thread(
+                    target=self._execute_query_operation,
+                    args=(client, operation, index_name, stage.duration_seconds,
+                          monitor, operation_results)
+                )
+            elif operation.type == WorkloadType.INSERT:
+                thread = threading.Thread(
+                    target=self._execute_insert_operation,
+                    args=(client, operation, generator, deleted_keys,
+                          current_key_count, initial_keys, monitor, operation_results)
+                )
+            elif operation.type == WorkloadType.OVERWRITE:
+                thread = threading.Thread(
+                    target=self._execute_overwrite_operation,
+                    args=(client, operation, all_keys, generator,
+                          stage.duration_seconds, monitor, operation_results)
+                )
+            else:
+                continue
+            
+            thread.start()
+            threads.append(thread)
+        
+        # Wait for all operations to complete
+        for thread in threads:
+            thread.join()
+        
+        return operation_results
+    
+    def _execute_delete_operation(self, client, operation: WorkloadOperation, 
+                                 all_keys: List[str], deleted_keys: Set[str],
+                                 current_key_count: int, monitor: ProgressMonitor,
+                                 results: List[Dict]):
+        """Execute delete operation with multiple threads"""
+        target_count = int(current_key_count * (1 - operation.target_value))
+        keys_to_delete = current_key_count - target_count
+        
+        if keys_to_delete <= 0:
+            return
+        
+        # Select random keys to delete (excluding already deleted)
+        available_keys = [k for k in all_keys if k not in deleted_keys]
+        if len(available_keys) < keys_to_delete:
+            keys_to_delete = len(available_keys)
+        
+        delete_list = random.sample(available_keys, keys_to_delete)
+        
+        monitor.log(f"   🗑️  Deleting {keys_to_delete:,} keys to reach {operation.target_value*100:.0f}% fill")
+        
+        start_time = time.time()
+        batch_size = 100
+        deleted_count = 0
+        
+        # Delete in batches
+        for i in range(0, len(delete_list), batch_size):
+            batch = delete_list[i:i + batch_size]
+            pipe = client.pipeline(transaction=False)
+            for key in batch:
+                pipe.delete(key)
+            pipe.execute()
+            deleted_keys.update(batch)
+            deleted_count += len(batch)
+            
+            if deleted_count % 1000 == 0:
+                monitor.update_status({
+                    "Delete Progress": f"{deleted_count:,}/{keys_to_delete:,}"
+                })
+        
+        duration = time.time() - start_time
+        results.append({
+            'operation': 'delete',
+            'target_percentage': operation.target_value,
+            'keys_deleted': deleted_count,
+            'duration_seconds': duration,
+            'keys_per_second': deleted_count / duration if duration > 0 else 0
+        })
+    
+    def _execute_query_operation(self, client, operation: WorkloadOperation,
+                                index_name: str, stage_duration: int,
+                                monitor: ProgressMonitor, results: List[Dict]):
+        """Execute query operation for specified duration"""
+        duration = operation.duration_seconds or stage_duration or 60  # Default 60s
+        
+        monitor.log(f"   🔍 Running queries for {duration}s")
+        
+        start_time = time.time()
+        query_count = 0
+        total_results = 0
+        
+        # Generate random query vectors
+        vector_dim = 8  # Default, should match scenario config
+        
+        while (time.time() - start_time) < duration:
+            # Generate random vector for KNN query
+            query_vector = np.random.rand(vector_dim).astype(np.float32).tobytes()
+            
+            # Execute KNN query
+            try:
+                result = client.execute_command(
+                    "FT.SEARCH", index_name,
+                    "*=>[KNN 10 @vector $vec]",
+                    "PARAMS", "2", "vec", query_vector,
+                    "LIMIT", "0", "10",
+                    "RETURN", "1", "__vector_score"
+                )
+                query_count += 1
+                total_results += (result[0] if isinstance(result, list) else 0)
+                
+                if query_count % 100 == 0:
+                    elapsed = time.time() - start_time
+                    qps = query_count / elapsed if elapsed > 0 else 0
+                    monitor.update_status({
+                        "Query Progress": f"{query_count:,} queries, {qps:.0f} QPS"
+                    })
+            except Exception as e:
+                monitor.log(f"   ⚠️  Query error: {e}")
+        
+        final_duration = time.time() - start_time
+        results.append({
+            'operation': 'query',
+            'duration_seconds': final_duration,
+            'query_count': query_count,
+            'queries_per_second': query_count / final_duration if final_duration > 0 else 0,
+            'avg_results_per_query': total_results / query_count if query_count > 0 else 0
+        })
+    
+    def _execute_insert_operation(self, client, operation: WorkloadOperation,
+                                 generator: HashKeyGenerator, deleted_keys: Set[str],
+                                 current_key_count: int, initial_keys: int,
+                                 monitor: ProgressMonitor, results: List[Dict]):
+        """Execute insert operation to reach target fill percentage"""
+        target_count = int(initial_keys * operation.target_value)
+        keys_to_insert = target_count - current_key_count
+        
+        if keys_to_insert <= 0:
+            return
+        
+        monitor.log(f"   ➕ Inserting {keys_to_insert:,} keys to reach {operation.target_value*100:.0f}% fill")
+        
+        start_time = time.time()
+        inserted_count = 0
+        batch_size = 100
+        
+        # Generate and insert new keys
+        key_offset = initial_keys  # Start from where initial insertion ended
+        
+        for batch_start in range(0, keys_to_insert, batch_size):
+            batch_end = min(batch_start + batch_size, keys_to_insert)
+            batch_count = batch_end - batch_start
+            
+            pipe = client.pipeline(transaction=False)
+            for i in range(batch_count):
+                key_num = key_offset + inserted_count + i
+                key = f"key:{key_num:08d}"
+                
+                # Generate fields similar to original data
+                fields = generator._generate_fields(key_num)
+                pipe.hset(key, mapping=fields)
+            
+            pipe.execute()
+            inserted_count += batch_count
+            
+            # Remove from deleted set if we're reusing keys
+            for i in range(batch_count):
+                key_num = key_offset + inserted_count - batch_count + i
+                key = f"key:{key_num:08d}"
+                deleted_keys.discard(key)
+            
+            if inserted_count % 1000 == 0:
+                monitor.update_status({
+                    "Insert Progress": f"{inserted_count:,}/{keys_to_insert:,}"
+                })
+        
+        duration = time.time() - start_time
+        results.append({
+            'operation': 'insert',
+            'target_percentage': operation.target_value,
+            'keys_inserted': inserted_count,
+            'duration_seconds': duration,
+            'keys_per_second': inserted_count / duration if duration > 0 else 0
+        })
+    
+    def _execute_overwrite_operation(self, client, operation: WorkloadOperation,
+                                    all_keys: List[str], generator: HashKeyGenerator,
+                                    stage_duration: int, monitor: ProgressMonitor,
+                                    results: List[Dict]):
+        """Execute overwrite operation on portion of keyspace"""
+        duration = stage_duration or 60  # Default 60s
+        overwrite_percentage = operation.target_value or 0.1  # Default 10%
+        
+        keys_to_overwrite = int(len(all_keys) * overwrite_percentage)
+        monitor.log(f"   🔄 Overwriting {overwrite_percentage*100:.0f}% of keyspace "
+                   f"({keys_to_overwrite:,} keys) for {duration}s")
+        
+        start_time = time.time()
+        overwrites_done = 0
+        
+        while (time.time() - start_time) < duration:
+            # Select random keys to overwrite
+            batch_size = min(100, keys_to_overwrite)
+            overwrite_batch = random.sample(all_keys, batch_size)
+            
+            pipe = client.pipeline(transaction=False)
+            for key in overwrite_batch:
+                # Generate new fields
+                key_num = int(key.split(':')[1])
+                fields = generator._generate_fields(key_num)
+                pipe.hset(key, mapping=fields)
+            
+            pipe.execute()
+            overwrites_done += len(overwrite_batch)
+            
+            if overwrites_done % 1000 == 0:
+                elapsed = time.time() - start_time
+                ops = overwrites_done / elapsed if elapsed > 0 else 0
+                monitor.update_status({
+                    "Overwrite Progress": f"{overwrites_done:,} overwrites, {ops:.0f} OPS"
+                })
+        
+        final_duration = time.time() - start_time
+        results.append({
+            'operation': 'overwrite',
+            'target_percentage': overwrite_percentage,
+            'keys_overwritten': overwrites_done,
+            'duration_seconds': final_duration,
+            'overwrites_per_second': overwrites_done / final_duration if final_duration > 0 else 0
+        })
+    
+    def get_all_keys(self, client, prefix: str = "key:") -> List[str]:
+        """Get all keys with given prefix"""
+        cursor = 0
+        all_keys = []
+        
+        while True:
+            cursor, keys = client.scan(cursor, match=f"{prefix}*", count=1000)
+            all_keys.extend(keys)
+            if cursor == 0:
+                break
+        
+        return all_keys
     
     def test_search_memory_usage(self, use_async: bool = True):
         """Benchmark search memory usage"""
@@ -2991,224 +3498,239 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         scenarios = [
             BenchmarkScenario(
-                name="Quick_SingleUniqueTag100Keys10K",
-                total_keys=10000,
-                tags_config=TagsConfig(
-                    num_keys=10000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
-                    tag_length=LengthConfig(avg=100, min=100, max=100),
-                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
-                ),
-                description="1 unique tag per key, tag length 100 bytes, 10K keys + 8-dim vectors + 2 numeric fields",
-                vector_dim=8,
-                vector_algorithm=VectorAlgorithm.FLAT,
-                vector_metric=VectorMetric.COSINE,
-                include_numeric=True
-            ),
-            BenchmarkScenario(
-                name="Quick_SingleUniqueTag100Keys100K",
-                total_keys=100000,
-                tags_config=TagsConfig(
-                    num_keys=100000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
-                    tag_length=LengthConfig(avg=100, min=100, max=100),
-                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
-                ),
-                description="1 unique tag per key, tag length 100 bytes, 100K keys + 16-dim vectors + 2 numeric fields",
-                vector_dim=16,
-                vector_algorithm=VectorAlgorithm.FLAT,
-                vector_metric=VectorMetric.COSINE,
-                include_numeric=True
-            ),
-            BenchmarkScenario(
-                name="Quick_SingleUniqueTag1000Keys10K",
-                total_keys=10000,
-                tags_config=TagsConfig(
-                    num_keys=10000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
-                    tag_length=LengthConfig(avg=1000, min=1000, max=1000),
-                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
-                ),
-                description="1 unique tag per key, tag length 1000 bytes, 10K keys + 32-dim vectors + 2 numeric fields",
-                vector_dim=32,
-                vector_algorithm=VectorAlgorithm.FLAT,
-                vector_metric=VectorMetric.L2,
-                include_numeric=True
-            ),
-            BenchmarkScenario(
-                name="Quick_SingleUniqueTag1000Keys100K",
-                total_keys=100000,
-                tags_config=TagsConfig(
-                    num_keys=100000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
-                    tag_length=LengthConfig(avg=1000, min=1000, max=1000),
-                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
-                ),
-                description="1 unique tag per key, tag length 1000 bytes, 100K keys + 64-dim vectors + 2 numeric fields",
-                vector_dim=64,
-                vector_algorithm=VectorAlgorithm.HNSW,
-                vector_metric=VectorMetric.COSINE,
-                include_numeric=True
-            ),
-            
-            # Tag Sharing Scenarios - Test non-linear effects of keys_per_tag
-            BenchmarkScenario(
-                name="Quick_TagShare_Low",
-                total_keys=50000,
-                tags_config=TagsConfig(
-                    num_keys=50000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
-                    tag_length=LengthConfig(avg=100, min=100, max=100),
-                    sharing=TagSharingConfig(
-                        mode=TagSharingMode.SHARED_POOL,
-                        pool_size=5000  # 10 keys per tag
-                    )
-                ),
-                description="Tag sharing: 10 keys per tag, 50K keys, 5K unique tags + 128-dim vectors + 2 numeric fields",
-                vector_dim=128,
-                vector_algorithm=VectorAlgorithm.FLAT,
-                vector_metric=VectorMetric.IP,
-                include_numeric=True
-            ),
-            BenchmarkScenario(
-                name="Quick_TagShare_Medium", 
-                total_keys=50000,
-                tags_config=TagsConfig(
-                    num_keys=50000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
-                    tag_length=LengthConfig(avg=100, min=100, max=100),
-                    sharing=TagSharingConfig(
-                        mode=TagSharingMode.SHARED_POOL,
-                        pool_size=500  # 100 keys per tag
-                    )
-                ),
-                description="Tag sharing: 100 keys per tag, 50K keys, 500 unique tags + 256-dim vectors + 2 numeric fields",
-                vector_dim=256,
-                vector_algorithm=VectorAlgorithm.HNSW,
-                vector_metric=VectorMetric.COSINE,
-                include_numeric=True
-            ),
-            BenchmarkScenario(
-                name="Quick_TagShare_High",
-                total_keys=50000,
-                tags_config=TagsConfig(
-                    num_keys=50000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
-                    tag_length=LengthConfig(avg=100, min=100, max=100),
-                    sharing=TagSharingConfig(
-                        mode=TagSharingMode.SHARED_POOL,
-                        pool_size=50  # 1000 keys per tag
-                    )
-                ),
-                description="Tag sharing: 1000 keys per tag, 50K keys, 50 unique tags + 512-dim vectors + 2 numeric fields",
-                vector_dim=512,
-                vector_algorithm=VectorAlgorithm.HNSW,
-                vector_metric=VectorMetric.L2,
-                include_numeric=True,
-                numeric_fields={"score": (0.0, 100.0), "timestamp": (1000000000.0, 2000000000.0), "priority": (1.0, 10.0)}
-            ),
-            
-            # Prefix Sharing Scenarios - Test Patricia tree efficiency
-            BenchmarkScenario(
-                name="Quick_PrefixShare_25pct",
-                total_keys=30000,
-                tags_config=TagsConfig(
-                    num_keys=30000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
-                    tag_length=LengthConfig(avg=64, min=64, max=64),
-                    tag_prefix=PrefixConfig(
-                        enabled=True,
-                        min_shared=16,  # 25% of 64-char tags = 16 chars
-                        max_shared=16,
-                        share_probability=0.8,  # High chance of sharing prefix
-                        prefix_pool_size=4  # 4 different prefixes
-                    ),
-                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
-                ),
-                description="Prefix sharing: 25% common prefix, 30K keys, unique tags + 768-dim vectors + 2 numeric fields",
-                vector_dim=768,
-                vector_algorithm=VectorAlgorithm.HNSW,
-                vector_metric=VectorMetric.COSINE,
-                include_numeric=True
-            ),
-            BenchmarkScenario(
-                name="Quick_PrefixShare_75pct",
+                name="Delete_Query_Test",
                 total_keys=1000000,
                 tags_config=TagsConfig(
                     num_keys=1000000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
-                    tag_length=LengthConfig(avg=64, min=64, max=64),
-                    tag_prefix=PrefixConfig(
-                        enabled=True,
-                        min_shared=48,  # 75% of 64-char tags = 48 chars
-                        max_shared=48,
-                        share_probability=0.9,  # Very high chance of sharing prefix
-                        prefix_pool_size=4  # 4 different prefixes
-                    ),
-                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
-                ),
-                description="Prefix sharing: 75% common prefix, 30K keys, unique tags + 128-dim vectors + 3 numeric fields",
-                vector_dim=128,
-                vector_algorithm=VectorAlgorithm.HNSW,
-                vector_metric=VectorMetric.IP,
-                include_numeric=True,
-                numeric_fields={"score": (0.0, 100.0), "timestamp": (1000000000.0, 2000000000.0), "rating": (1.0, 5.0)}
-            ),
-            
-            # Mixed Scenario - Combined effects
-            BenchmarkScenario(
-                name="HNSW_wNumeric_HighShare_HighPrefix",
-                total_keys=100000,
-                tags_config=TagsConfig(
-                    num_keys=100000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
-                    tag_length=LengthConfig(avg=64, min=64, max=64),
-                    tag_prefix=PrefixConfig(
-                        enabled=True,
-                        min_shared=48,  # 75% prefix sharing
-                        max_shared=48,
-                        share_probability=0.95,  # Very high prefix reuse
-                        prefix_pool_size=2  # Only 2 different prefixes
-                    ),
-                    sharing=TagSharingConfig(
-                        mode=TagSharingMode.SHARED_POOL,
-                        pool_size=100  # High sharing: 400 keys per tag
-                    )
-                ),
-                description="Mixed: High tag sharing + 75% prefix overlap, 40K keys + 1500-dim vectors + 4 numeric fields",
-                vector_dim=1500,
-                vector_algorithm=VectorAlgorithm.HNSW,
-                vector_metric=VectorMetric.COSINE,
-                include_numeric=True,
-                numeric_fields={
-                    "score": (0.0, 100.0),
-                    "timestamp": (1000000000.0, 2000000000.0),
-                    "priority": (1.0, 10.0),
-                    "confidence": (0.0, 1.0)
-                }
-            ),
-            # # Mixed Scenario - Combined effects
-            BenchmarkScenario(
-                name="HNSW_wNumeric_TagNotShared_noPrefixShare",
-                total_keys=100000,
-                tags_config=TagsConfig(
-                    num_keys=100000,
                     tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
-                    tag_length=LengthConfig(avg=1000, min=1000, max=1000),
+                    tag_length=LengthConfig(avg=100, min=100, max=100),
                     sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
                 ),
-                description="Mixed: No Tag sharing between keys and no prefix sharing, 100K keys + 1500-dim vectors + 4 numeric fields",
+                description="Test with delete and query workload",
                 vector_dim=1500,
                 vector_algorithm=VectorAlgorithm.HNSW,
                 vector_metric=VectorMetric.COSINE,
-                include_numeric=True,
-                numeric_fields={
-                    "score": (0.0, 100.0),
-                    "timestamp": (1000000000.0, 2000000000.0),
-                    "priority": (1.0, 10.0),
-                    "confidence": (0.0, 1.0)
-                }
+                workload_string="del:50%,query+insert:80%,query:5min,query+del:50%,insert:100%,overwrite:10%:1min"
             ),
+            # BenchmarkScenario(
+            #     name="Quick_SingleUniqueTag100Keys10K",
+            #     total_keys=10000,
+            #     tags_config=TagsConfig(
+            #         num_keys=10000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
+            #         tag_length=LengthConfig(avg=100, min=100, max=100),
+            #         sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+            #     ),
+            #     description="1 unique tag per key, tag length 100 bytes, 10K keys + 8-dim vectors + 2 numeric fields",
+            #     vector_dim=8,
+            #     vector_algorithm=VectorAlgorithm.FLAT,
+            #     vector_metric=VectorMetric.COSINE,
+            #     include_numeric=True
+            # ),
+            # BenchmarkScenario(
+            #     name="Quick_SingleUniqueTag100Keys100K",
+            #     total_keys=100000,
+            #     tags_config=TagsConfig(
+            #         num_keys=100000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
+            #         tag_length=LengthConfig(avg=100, min=100, max=100),
+            #         sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+            #     ),
+            #     description="1 unique tag per key, tag length 100 bytes, 100K keys + 16-dim vectors + 2 numeric fields",
+            #     vector_dim=16,
+            #     vector_algorithm=VectorAlgorithm.FLAT,
+            #     vector_metric=VectorMetric.COSINE,
+            #     include_numeric=True
+            # ),
+            # BenchmarkScenario(
+            #     name="Quick_SingleUniqueTag1000Keys10K",
+            #     total_keys=10000,
+            #     tags_config=TagsConfig(
+            #         num_keys=10000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
+            #         tag_length=LengthConfig(avg=1000, min=1000, max=1000),
+            #         sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+            #     ),
+            #     description="1 unique tag per key, tag length 1000 bytes, 10K keys + 32-dim vectors + 2 numeric fields",
+            #     vector_dim=32,
+            #     vector_algorithm=VectorAlgorithm.FLAT,
+            #     vector_metric=VectorMetric.L2,
+            #     include_numeric=True
+            # ),
+            # BenchmarkScenario(
+            #     name="Quick_SingleUniqueTag1000Keys100K",
+            #     total_keys=100000,
+            #     tags_config=TagsConfig(
+            #         num_keys=100000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
+            #         tag_length=LengthConfig(avg=1000, min=1000, max=1000),
+            #         sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+            #     ),
+            #     description="1 unique tag per key, tag length 1000 bytes, 100K keys + 64-dim vectors + 2 numeric fields",
+            #     vector_dim=64,
+            #     vector_algorithm=VectorAlgorithm.HNSW,
+            #     vector_metric=VectorMetric.COSINE,
+            #     include_numeric=True
+            # ),
+            
+            # # Tag Sharing Scenarios - Test non-linear effects of keys_per_tag
+            # BenchmarkScenario(
+            #     name="Quick_TagShare_Low",
+            #     total_keys=50000,
+            #     tags_config=TagsConfig(
+            #         num_keys=50000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),
+            #         tag_length=LengthConfig(avg=100, min=100, max=100),
+            #         sharing=TagSharingConfig(
+            #             mode=TagSharingMode.SHARED_POOL,
+            #             pool_size=5000  # 10 keys per tag
+            #         )
+            #     ),
+            #     description="Tag sharing: 10 keys per tag, 50K keys, 5K unique tags + 128-dim vectors + 2 numeric fields",
+            #     vector_dim=128,
+            #     vector_algorithm=VectorAlgorithm.FLAT,
+            #     vector_metric=VectorMetric.IP,
+            #     include_numeric=True
+            # ),
+            # BenchmarkScenario(
+            #     name="Quick_TagShare_Medium", 
+            #     total_keys=50000,
+            #     tags_config=TagsConfig(
+            #         num_keys=50000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),
+            #         tag_length=LengthConfig(avg=100, min=100, max=100),
+            #         sharing=TagSharingConfig(
+            #             mode=TagSharingMode.SHARED_POOL,
+            #             pool_size=500  # 100 keys per tag
+            #         )
+            #     ),
+            #     description="Tag sharing: 100 keys per tag, 50K keys, 500 unique tags + 256-dim vectors + 2 numeric fields",
+            #     vector_dim=256,
+            #     vector_algorithm=VectorAlgorithm.HNSW,
+            #     vector_metric=VectorMetric.COSINE,
+            #     include_numeric=True
+            # ),
+            # BenchmarkScenario(
+            #     name="Quick_TagShare_High",
+            #     total_keys=50000,
+            #     tags_config=TagsConfig(
+            #         num_keys=50000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),
+            #         tag_length=LengthConfig(avg=100, min=100, max=100),
+            #         sharing=TagSharingConfig(
+            #             mode=TagSharingMode.SHARED_POOL,
+            #             pool_size=50  # 1000 keys per tag
+            #         )
+            #     ),
+            #     description="Tag sharing: 1000 keys per tag, 50K keys, 50 unique tags + 512-dim vectors + 2 numeric fields",
+            #     vector_dim=512,
+            #     vector_algorithm=VectorAlgorithm.HNSW,
+            #     vector_metric=VectorMetric.L2,
+            #     include_numeric=True,
+            #     numeric_fields={"score": (0.0, 100.0), "timestamp": (1000000000.0, 2000000000.0), "priority": (1.0, 10.0)}
+            # ),
+            
+            # # Prefix Sharing Scenarios - Test Patricia tree efficiency
+            # BenchmarkScenario(
+            #     name="Quick_PrefixShare_25pct",
+            #     total_keys=30000,
+            #     tags_config=TagsConfig(
+            #         num_keys=30000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),
+            #         tag_length=LengthConfig(avg=64, min=64, max=64),
+            #         tag_prefix=PrefixConfig(
+            #             enabled=True,
+            #             min_shared=16,  # 25% of 64-char tags = 16 chars
+            #             max_shared=16,
+            #             share_probability=0.8,  # High chance of sharing prefix
+            #             prefix_pool_size=4  # 4 different prefixes
+            #         ),
+            #         sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+            #     ),
+            #     description="Prefix sharing: 25% common prefix, 30K keys, unique tags + 768-dim vectors + 2 numeric fields",
+            #     vector_dim=768,
+            #     vector_algorithm=VectorAlgorithm.HNSW,
+            #     vector_metric=VectorMetric.COSINE,
+            #     include_numeric=True
+            # ),
+            # BenchmarkScenario(
+            #     name="Quick_PrefixShare_75pct",
+            #     total_keys=1000000,
+            #     tags_config=TagsConfig(
+            #         num_keys=1000000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),
+            #         tag_length=LengthConfig(avg=64, min=64, max=64),
+            #         tag_prefix=PrefixConfig(
+            #             enabled=True,
+            #             min_shared=48,  # 75% of 64-char tags = 48 chars
+            #             max_shared=48,
+            #             share_probability=0.9,  # Very high chance of sharing prefix
+            #             prefix_pool_size=4  # 4 different prefixes
+            #         ),
+            #         sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+            #     ),
+            #     description="Prefix sharing: 75% common prefix, 30K keys, unique tags + 128-dim vectors + 3 numeric fields",
+            #     vector_dim=128,
+            #     vector_algorithm=VectorAlgorithm.HNSW,
+            #     vector_metric=VectorMetric.IP,
+            #     include_numeric=True,
+            #     numeric_fields={"score": (0.0, 100.0), "timestamp": (1000000000.0, 2000000000.0), "rating": (1.0, 5.0)}
+            # ),
+            
+            # # Mixed Scenario - Combined effects
+            # BenchmarkScenario(
+            #     name="HNSW_wNumeric_HighShare_HighPrefix",
+            #     total_keys=100000,
+            #     tags_config=TagsConfig(
+            #         num_keys=100000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),
+            #         tag_length=LengthConfig(avg=64, min=64, max=64),
+            #         tag_prefix=PrefixConfig(
+            #             enabled=True,
+            #             min_shared=48,  # 75% prefix sharing
+            #             max_shared=48,
+            #             share_probability=0.95,  # Very high prefix reuse
+            #             prefix_pool_size=2  # Only 2 different prefixes
+            #         ),
+            #         sharing=TagSharingConfig(
+            #             mode=TagSharingMode.SHARED_POOL,
+            #             pool_size=100  # High sharing: 400 keys per tag
+            #         )
+            #     ),
+            #     description="Mixed: High tag sharing + 75% prefix overlap, 40K keys + 1500-dim vectors + 4 numeric fields",
+            #     vector_dim=1500,
+            #     vector_algorithm=VectorAlgorithm.HNSW,
+            #     vector_metric=VectorMetric.COSINE,
+            #     include_numeric=True,
+            #     numeric_fields={
+            #         "score": (0.0, 100.0),
+            #         "timestamp": (1000000000.0, 2000000000.0),
+            #         "priority": (1.0, 10.0),
+            #         "confidence": (0.0, 1.0)
+            #     }
+            # ),
+            # # # Mixed Scenario - Combined effects
+            # BenchmarkScenario(
+            #     name="HNSW_wNumeric_TagNotShared_noPrefixShare",
+            #     total_keys=100000,
+            #     tags_config=TagsConfig(
+            #         num_keys=100000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
+            #         tag_length=LengthConfig(avg=1000, min=1000, max=1000),
+            #         sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
+            #     ),
+            #     description="Mixed: No Tag sharing between keys and no prefix sharing, 100K keys + 1500-dim vectors + 4 numeric fields",
+            #     vector_dim=1500,
+            #     vector_algorithm=VectorAlgorithm.HNSW,
+            #     vector_metric=VectorMetric.COSINE,
+            #     include_numeric=True,
+            #     numeric_fields={
+            #         "score": (0.0, 100.0),
+            #         "timestamp": (1000000000.0, 2000000000.0),
+            #         "priority": (1.0, 10.0),
+            #         "confidence": (0.0, 1.0)
+            #     }
+            # ),
             # BenchmarkScenario(
             #     name="10M_Unique",
             #     total_keys=1000000,
