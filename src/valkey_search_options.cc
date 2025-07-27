@@ -124,7 +124,7 @@ static const std::vector<int> kLogLevelValues = {
     static_cast<int>(LogLevel::kWarning), static_cast<int>(LogLevel::kNotice),
     static_cast<int>(LogLevel::kVerbose), static_cast<int>(LogLevel::kDebug)};
 
-/// Should this instance reindex vector index RDB loading?
+/// Should this instance skip loading index data from RDB?
 constexpr absl::string_view kReIndexVectorRDBLoad{"skip-rdb-load"};
 static auto rdb_load_skip_index =
     config::BooleanBuilder(kReIndexVectorRDBLoad, false).Build();
