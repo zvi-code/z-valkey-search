@@ -79,6 +79,204 @@ def get_key_count_from_db_info(db_info: Dict[str, Any]) -> int:
     return 0
 
 
+def get_memory_info_summary(client, state_name: str = "") -> Dict[str, Any]:
+    """Get comprehensive memory information from client."""
+    info_all = client.execute_command("info", "memory")
+    search_info = client.execute_command("info", "modules")
+    memory_info = client.info("memory")
+    
+    return {
+        'info_all': info_all,
+        'search_info': search_info,
+        'memory_info': memory_info,
+        'used_memory': safe_get(memory_info, 'used_memory', 0),
+        'used_memory_kb': safe_get(memory_info, 'used_memory', 0) // 1024,
+        'used_memory_human': safe_get(info_all, 'used_memory_human', 'N/A'),
+        'search_used_memory_human': safe_get(search_info, 'search_used_memory_human', 'N/A'),
+        'search_used_memory': safe_get(search_info, 'search_used_memory', 0),
+        'search_used_memory_kb': safe_get(search_info, 'search_used_memory', 0) // 1024,
+        'used_memory_dataset': safe_get(info_all, 'used_memory_dataset', 0)
+    }
+
+
+def log_memory_info(monitor, memory_info: Dict[str, Any], state_name: str = ""):
+    """Log memory information using a monitor."""
+    if state_name:
+        monitor.log(f"{state_name}:used_memory_human={memory_info['used_memory_human']}")
+        monitor.log(f"{state_name}:search_used_memory_human={memory_info['search_used_memory_human']}")
+    else:
+        monitor.log(f"💾 System Memory: {memory_info['used_memory_human']}")
+        monitor.log(f"🔍 Search Memory: {memory_info['search_used_memory_human']}")
+
+
+def parse_ft_info(ft_info_response) -> Dict[str, Any]:
+    """Parse FT.INFO response into a dictionary."""
+    index_data = {}
+    for i in range(0, len(ft_info_response), 2):
+        if i + 1 < len(ft_info_response):
+            key = ft_info_response[i].decode() if isinstance(ft_info_response[i], bytes) else str(ft_info_response[i])
+            value = ft_info_response[i + 1]
+            if isinstance(value, bytes):
+                try:
+                    value = value.decode()
+                except:
+                    pass
+            index_data[key] = value
+    return index_data
+
+
+def calculate_progress_stats(processed_count: int, total_items: int, elapsed_time: float) -> Dict[str, Any]:
+    """Calculate progress statistics for monitoring."""
+    progress_pct = (processed_count / total_items) * 100 if total_items > 0 else 0
+    items_per_sec = processed_count / elapsed_time if elapsed_time > 0 else 0
+    eta_seconds = (total_items - processed_count) / items_per_sec if items_per_sec > 0 else 0
+    eta_str = f"{eta_seconds/60:.1f}m" if eta_seconds > 60 else f"{eta_seconds:.0f}s"
+    
+    return {
+        'progress_pct': progress_pct,
+        'items_per_sec': items_per_sec,
+        'eta_str': eta_str,
+        'progress_text': f"{processed_count:,}/{total_items:,} ({progress_pct:.1f}%)",
+        'speed_text': f"{items_per_sec:.0f} items/sec"
+    }
+
+
+def get_index_state_info(ft_info_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract index state information from FT.INFO response."""
+    return {
+        'num_docs': int(ft_info_dict.get('num_docs', 0)),
+        'mutation_queue_size': int(ft_info_dict.get('mutation_queue_size', 0)),
+        'backfill_in_progress': int(ft_info_dict.get('backfill_in_progress', 0)),
+        'state': ft_info_dict.get('state', 'unknown'),
+        'is_indexing': int(ft_info_dict.get('mutation_queue_size', 0)) > 0 or int(ft_info_dict.get('backfill_in_progress', 0)) > 0
+    }
+
+
+def create_silent_client_from_server(server) -> 'SilentValkeyClient':
+    """Create a silent Valkey client from a server instance."""
+    if hasattr(server, 'get_new_client'):
+        # Temporarily suppress logging while getting connection params
+        original_level = logging.getLogger().level
+        logging.getLogger().setLevel(logging.CRITICAL)
+        
+        try:
+            # Get a regular client first to extract connection params
+            temp_client = server.get_new_client()
+            connection_kwargs = temp_client.connection_pool.connection_kwargs
+            temp_client.close()
+        finally:
+            # Restore logging level
+            logging.getLogger().setLevel(original_level)
+        
+        # Create our silent client with the same params
+        return SilentValkeyClient(**connection_kwargs)
+    else:
+        # Fallback: create with default params
+        return SilentValkeyClient(host='localhost', port=6379, decode_responses=True)
+
+
+async def create_silent_async_client_from_server(server) -> 'AsyncSilentValkeyClient':
+    """Create a silent async Valkey client from a server instance."""
+    if hasattr(server, 'get_new_client'):
+        # Temporarily suppress logging while getting connection params
+        original_level = logging.getLogger().level
+        logging.getLogger().setLevel(logging.CRITICAL)
+        
+        try:
+            # Get connection params from sync client
+            temp_client = server.get_new_client()
+            connection_kwargs = temp_client.connection_pool.connection_kwargs.copy()
+            temp_client.close()
+        finally:
+            # Restore logging level
+            logging.getLogger().setLevel(original_level)
+        
+        # Remove sync-specific params and add async-specific ones
+        connection_kwargs.pop('connection_pool', None)
+        connection_kwargs.pop('connection_class', None)
+        
+        # Create async client with extracted params
+        return AsyncSilentValkeyClient(**connection_kwargs)
+    else:
+        # Fallback: create with default params
+        return AsyncSilentValkeyClient(host='localhost', port=6379, decode_responses=True)
+
+
+def write_csv_data(filename: str, data: List[Dict[str, Any]], fieldnames: Optional[List[str]] = None):
+    """Write data to CSV file with proper error handling."""
+    import csv
+    
+    if not data:
+        return
+    
+    # Auto-detect fieldnames if not provided
+    if fieldnames is None:
+        fieldnames = list(data[0].keys()) if data else []
+    
+    try:
+        with open(filename, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(data)
+    except Exception as e:
+        logging.error(f"Failed to write CSV file {filename}: {e}")
+        raise
+
+
+def silence_valkey_loggers():
+    """Temporarily silence valkey-related loggers and return restoration function."""
+    import sys
+    import io
+    
+    original_levels = {}
+    loggers_to_silence = [
+        '',  # root logger
+        'valkey',
+        'valkey.client', 
+        'valkey.connection',
+        'valkey_search',
+        'valkey_search_test_case',
+        'ValkeySearchTestCaseBase',
+        __name__  # current module logger
+    ]
+    
+    # Disable all potentially noisy loggers
+    for logger_name in loggers_to_silence:
+        logger = logging.getLogger(logger_name)
+        original_levels[logger_name] = logger.level
+        logger.setLevel(logging.CRITICAL)
+    
+    # Also temporarily disable all handlers
+    original_root_handlers = logging.root.handlers[:]
+    null_handler = logging.NullHandler()
+    
+    # Save original stdout/stderr in case client prints directly
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    
+    # Replace root handlers with null handler
+    logging.root.handlers = [null_handler]
+    
+    # Redirect stdout/stderr to null
+    sys.stdout = io.StringIO()
+    sys.stderr = io.StringIO()
+    
+    def restore_loggers():
+        """Restore original logging configuration."""
+        # Restore stdout/stderr
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+        
+        # Restore root handlers
+        logging.root.handlers = original_root_handlers
+        
+        # Restore logger levels
+        for logger_name, level in original_levels.items():
+            logging.getLogger(logger_name).setLevel(level)
+    
+    return restore_loggers
+
+
 class SilentValkeyClient(Valkey):
     """
     A Valkey client wrapper that suppresses client creation logs.
@@ -86,56 +284,14 @@ class SilentValkeyClient(Valkey):
     """
     
     def __init__(self, *args, **kwargs):
-        # Save original logging state for multiple loggers
-        original_levels = {}
-        loggers_to_silence = [
-            '',  # root logger
-            'valkey',
-            'valkey.client',
-            'valkey.connection',
-            'valkey_search',
-            'valkey_search_test_case',
-            'ValkeySearchTestCaseBase',
-            __name__  # current module logger
-        ]
-        
-        # Disable all potentially noisy loggers
-        for logger_name in loggers_to_silence:
-            logger = logging.getLogger(logger_name)
-            original_levels[logger_name] = logger.level
-            logger.setLevel(logging.CRITICAL)
-        
-        # Also temporarily disable all handlers
-        original_root_handlers = logging.root.handlers[:]
-        null_handler = logging.NullHandler()
-        
-        # Save original stdout/stderr in case client prints directly
-        original_stdout = sys.stdout
-        original_stderr = sys.stderr
+        """Initialize client with suppressed logging"""
+        restore_loggers = silence_valkey_loggers()
         
         try:
-            # Replace root handlers with null handler
-            logging.root.handlers = [null_handler]
-            
-            # Redirect stdout/stderr to null
-            sys.stdout = io.StringIO()
-            sys.stderr = io.StringIO()
-            
             # Create the client
             super().__init__(*args, **kwargs)
-            
         finally:
-            # Restore stdout/stderr
-            sys.stdout = original_stdout
-            sys.stderr = original_stderr
-            
-            # Restore original logging configuration
-            logging.root.handlers = original_root_handlers
-            
-            # Restore all logger levels
-            for logger_name, level in original_levels.items():
-                logger = logging.getLogger(logger_name)
-                logger.setLevel(level)
+            restore_loggers()
 
 
 class AsyncSilentValkeyClient(AsyncValkey):
@@ -218,29 +374,7 @@ class AsyncSilentClientPool:
     
     async def _create_silent_async_client(self) -> AsyncSilentValkeyClient:
         """Create a new async client with logging suppressed"""
-        if hasattr(self.server, 'get_new_client'):
-            # Temporarily suppress logging while getting connection params
-            original_level = logging.getLogger().level
-            logging.getLogger().setLevel(logging.CRITICAL)
-            
-            try:
-                # Get connection params from sync client
-                temp_client = self.server.get_new_client()
-                connection_kwargs = temp_client.connection_pool.connection_kwargs.copy()
-                temp_client.close()
-            finally:
-                # Restore logging level
-                logging.getLogger().setLevel(original_level)
-            
-            # Remove sync-specific params and add async-specific ones
-            connection_kwargs.pop('connection_pool', None)
-            connection_kwargs.pop('connection_class', None)
-            
-            # Create async client with extracted params
-            return AsyncSilentValkeyClient(**connection_kwargs)
-        else:
-            # Fallback: create with default params
-            return AsyncSilentValkeyClient(host='localhost', port=6379, decode_responses=True)
+        return await create_silent_async_client_from_server(self.server)
     
     def get_client_for_task(self, task_id: int) -> tuple[AsyncSilentValkeyClient, asyncio.Semaphore]:
         """Get a client and its semaphore for a specific task ID"""
@@ -273,26 +407,7 @@ class SilentClientPool:
     
     def _create_silent_client(self) -> SilentValkeyClient:
         """Create a new client with logging suppressed"""
-        # Get connection info from server
-        if hasattr(self.server, 'get_new_client'):
-            # Temporarily suppress logging while getting connection params
-            original_level = logging.getLogger().level
-            logging.getLogger().setLevel(logging.CRITICAL)
-            
-            try:
-                # Get a regular client first to extract connection params
-                temp_client = self.server.get_new_client()
-                connection_kwargs = temp_client.connection_pool.connection_kwargs
-                temp_client.close()
-            finally:
-                # Restore logging level
-                logging.getLogger().setLevel(original_level)
-            
-            # Create our silent client with the same params
-            return SilentValkeyClient(**connection_kwargs)
-        else:
-            # Fallback: create with default params
-            return SilentValkeyClient(host='localhost', port=6379, decode_responses=True)
+        return create_silent_client_from_server(self.server)
     
     def get_client_for_thread(self, thread_index: int) -> SilentValkeyClient:
         """Get a dedicated client for a specific thread index"""
@@ -675,25 +790,7 @@ class ProgressMonitor:
     
     def _create_silent_client(self) -> SilentValkeyClient:
         """Create a silent client for monitoring"""
-        if hasattr(self.server, 'get_new_client'):
-            # Temporarily suppress logging while getting connection params
-            original_level = logging.getLogger().level
-            logging.getLogger().setLevel(logging.CRITICAL)
-            
-            try:
-                # Get a regular client first to extract connection params
-                temp_client = self.server.get_new_client()
-                connection_kwargs = temp_client.connection_pool.connection_kwargs
-                temp_client.close()
-            finally:
-                # Restore logging level
-                logging.getLogger().setLevel(original_level)
-            
-            # Create our silent client with the same params
-            return SilentValkeyClient(**connection_kwargs)
-        else:
-            # Fallback: create with default params
-            return SilentValkeyClient(host='localhost', port=6379, decode_responses=True)
+        return create_silent_client_from_server(self.server)
             
     def _monitor(self):
         """Background monitoring loop"""
@@ -719,18 +816,12 @@ class ProgressMonitor:
 
                 # Report system stats every 5 seconds
                 if current_time - last_report >= 5.0:
-                    state_name = "monitoring:"
-                    info_all = client.execute_command("info","memory")
-                    self.log(f"{state_name}:used_memory_human={safe_get(info_all, 'used_memory_human', 'N/A')}")           
-                    search_info = client.execute_command("info","modules")
-                    self.log(f"{state_name}:search_used_memory_human={safe_get(search_info, 'search_used_memory_human', 'N/A')}")  
-                    # Get memory info
-                    memory_info = client.info("memory")
-                    current_memory_kb = safe_get(memory_info, 'used_memory', 0) // 1024
-                    memory_delta = current_memory_kb - self.last_memory
+                    memory_summary = get_memory_info_summary(client)
+                    log_memory_info(self, memory_summary, "monitoring:")
                     
-                    # Get search module memory
-                    search_memory_kb = safe_get(search_info, 'search_used_memory', 0) // 1024
+                    current_memory_kb = memory_summary['used_memory_kb']
+                    memory_delta = current_memory_kb - self.last_memory
+                    search_memory_kb = memory_summary['search_used_memory_kb']
                     
                     # Get key count from db info
                     db_info = client.execute_command("info","keyspace")
@@ -745,18 +836,7 @@ class ProgressMonitor:
                         for index_name in current_index_names:
                             try:
                                 ft_info = client.execute_command("FT.INFO", index_name)
-                                # Parse FT.INFO response for this index
-                                index_data = {}
-                                for i in range(0, len(ft_info), 2):
-                                    if i + 1 < len(ft_info):
-                                        key = ft_info[i].decode() if isinstance(ft_info[i], bytes) else str(ft_info[i])
-                                        value = ft_info[i + 1]
-                                        if isinstance(value, bytes):
-                                            try:
-                                                value = value.decode()
-                                            except:
-                                                pass
-                                        index_data[key] = value
+                                index_data = parse_ft_info(ft_info)
                                 
                                 # Store index info with index name as key
                                 index_info[index_name] = index_data
@@ -1368,7 +1448,33 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 # Estimate compression based on prefix config
                 prefix_ratio = scenario.tags_config.tag_prefix.min_shared / max(avg_tag_len, 1)
                 prefix_sharing_factor = prefix_ratio
+        # Enhanced model calculation (in KB)
+        term1 = coef['constant']
+        term2 = coef['per_key'] * num_keys
+        term3 = coef['per_unique_tag'] * unique_tags
+        term4 = coef['per_tag_length'] * avg_tag_len
+        term5 = coef['tag_content'] * (unique_tags * avg_tag_len)
+        term6 = coef['sharing_efficiency'] * tag_sharing_factor
+        term7 = coef['prefix_compression'] * (prefix_sharing_factor * unique_tags)
+        term8 = coef['content_per_key'] * (num_keys * avg_tag_len / max(unique_tags, 1))
         
+        total_memory_kb = term1 + term2 + term3 + term4 + term5 + term6 + term7 + term8      
+
+        # Ensure minimum reasonable value
+        original_total = total_memory_kb
+        total_memory_kb = max(total_memory_kb, num_keys * 0.5)  # At least 0.5KB per key
+        
+        if monitor and total_memory_kb != original_total:
+            monitor.log(f"   Applied minimum: {total_memory_kb:.1f} KB (was {original_total:.1f} KB)")
+        
+        # Break down into components (estimates based on typical ratios)
+        total_memory_bytes = int(total_memory_kb * 1024)
+        
+        # Rough component breakdown (for compatibility with existing code)
+        data_memory = int(total_memory_bytes * 0.25)  # ~25% for raw data
+        tag_index_memory = int(total_memory_bytes * 0.60)  # ~60% for tag index
+        vector_index_memory = int(total_memory_bytes * 0.15)  # ~15% for vector index
+        index_memory = tag_index_memory + vector_index_memory  
         # Log the detailed formula and inputs
         if monitor:
             monitor.log("🧮 ENHANCED MEMORY ESTIMATION MODEL")
@@ -1390,42 +1496,10 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log(f"   Sharing efficiency:     {coef['sharing_efficiency']:.6f} × {tag_sharing_factor:.3f} = {coef['sharing_efficiency'] * tag_sharing_factor:>8.1f} KB")
             monitor.log(f"   Prefix compression:     {coef['prefix_compression']:.6f} × ({prefix_sharing_factor:.3f} × {unique_tags:,}) = {coef['prefix_compression'] * (prefix_sharing_factor * unique_tags):>8.1f} KB")
             monitor.log(f"   Content per key:        {coef['content_per_key']:.6f} × ({num_keys:,} × {avg_tag_len:.1f} / {unique_tags:,}) = {coef['content_per_key'] * (num_keys * avg_tag_len / max(unique_tags, 1)):>8.1f} KB")
-        
-        # Enhanced model calculation (in KB)
-        term1 = coef['constant']
-        term2 = coef['per_key'] * num_keys
-        term3 = coef['per_unique_tag'] * unique_tags
-        term4 = coef['per_tag_length'] * avg_tag_len
-        term5 = coef['tag_content'] * (unique_tags * avg_tag_len)
-        term6 = coef['sharing_efficiency'] * tag_sharing_factor
-        term7 = coef['prefix_compression'] * (prefix_sharing_factor * unique_tags)
-        term8 = coef['content_per_key'] * (num_keys * avg_tag_len / max(unique_tags, 1))
-        
-        total_memory_kb = term1 + term2 + term3 + term4 + term5 + term6 + term7 + term8
-        
-        if monitor:
             monitor.log("")
             monitor.log("📈 Model Calculation:")
             monitor.log(f"   Total = {term1:.1f} + {term2:.1f} + {term3:.1f} + {term4:.1f} + {term5:.1f} + {term6:.1f} + {term7:.1f} + {term8:.1f}")
             monitor.log(f"   Total = {total_memory_kb:.1f} KB")
-        
-        # Ensure minimum reasonable value
-        original_total = total_memory_kb
-        total_memory_kb = max(total_memory_kb, num_keys * 0.5)  # At least 0.5KB per key
-        
-        if monitor and total_memory_kb != original_total:
-            monitor.log(f"   Applied minimum: {total_memory_kb:.1f} KB (was {original_total:.1f} KB)")
-        
-        # Break down into components (estimates based on typical ratios)
-        total_memory_bytes = int(total_memory_kb * 1024)
-        
-        # Rough component breakdown (for compatibility with existing code)
-        data_memory = int(total_memory_bytes * 0.25)  # ~25% for raw data
-        tag_index_memory = int(total_memory_bytes * 0.60)  # ~60% for tag index
-        vector_index_memory = int(total_memory_bytes * 0.15)  # ~15% for vector index
-        index_memory = tag_index_memory + vector_index_memory
-        
-        if monitor:
             monitor.log("")
             monitor.log("🏗️  Component Breakdown (estimated ratios):")
             monitor.log(f"   • Data memory:       {data_memory // 1024:,} KB (25%)")
@@ -1811,32 +1885,21 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         while time.time() - start_time < timeout:
             # Get index info to check indexing status
-            info = client.execute_command("FT.INFO", index_name)
-            info_dict = {}
-            for i in range(0, len(info), 2):
-                key = info[i].decode() if isinstance(info[i], bytes) else str(info[i])
-                value = info[i+1]
-                if isinstance(value, bytes):
-                    value = value.decode()
-                info_dict[key] = value
+            ft_info = client.execute_command("FT.INFO", index_name)
+            info_dict = parse_ft_info(ft_info)
+            index_state = get_index_state_info(info_dict)
             
-            num_docs = int(info_dict.get('num_docs', 0))
-            mutation_queue_size = int(info_dict.get('mutation_queue_size', 0))
-            backfill_in_progress = int(info_dict.get('backfill_in_progress', 0))
+            num_docs = index_state['num_docs']
+            mutation_queue_size = index_state['mutation_queue_size']
+            backfill_in_progress = index_state['backfill_in_progress']
             backfill_complete_percent = float(info_dict.get('backfill_complete_percent', 0.0))
-            state = info_dict.get('state', 'unknown')
-            
-            # Index is still processing if there are mutations in queue or backfill in progress
-            indexing = mutation_queue_size > 0 or backfill_in_progress > 0
+            state = index_state['state']
+            indexing = index_state['is_indexing']
             
             # Get memory info
-            memory_info = client.info("memory")
-            current_memory_kb = safe_get(memory_info, 'used_memory', 0) // 1024
-            state_name = "Index is still processing:"
-            info_all = client.execute_command("info","memory")
-            monitor.log(f"{state_name}:used_memory_human={safe_get(info_all, 'used_memory_human', 'N/A')}")           
-            search_info = client.execute_command("info","modules")
-            monitor.log(f"{state_name}:search_used_memory_human={safe_get(search_info, 'search_used_memory_human', 'N/A')}")
+            memory_summary = get_memory_info_summary(client)
+            log_memory_info(monitor, memory_summary, "Index is still processing:")
+            current_memory_kb = memory_summary['used_memory_kb']
             # Calculate indexing rate
             current_time = time.time()
             elapsed = current_time - start_time
@@ -1846,11 +1909,10 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             time_since_report = current_time - last_report_time
             
             if time_since_report >= 5 or doc_progress >= expected_docs * 0.05:  # Every 5% progress
-                progress_pct = (num_docs / expected_docs * 100) if expected_docs > 0 else 0
-                docs_per_sec = num_docs / elapsed if elapsed > 0 else 0
-                
-                eta_seconds = (expected_docs - num_docs) / docs_per_sec if docs_per_sec > 0 and num_docs < expected_docs else 0
-                eta_str = f"{eta_seconds/60:.1f}m" if eta_seconds > 60 else f"{eta_seconds:.0f}s"
+                progress_stats = calculate_progress_stats(num_docs, expected_docs, elapsed)
+                docs_per_sec = progress_stats['items_per_sec']
+                progress_pct = progress_stats['progress_pct']
+                eta_str = progress_stats['eta_str']
                 
                 status = f"State: {state}"
                 if mutation_queue_size > 0:
@@ -1873,22 +1935,16 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                         f"(avg {avg_docs_per_sec:.0f} docs/sec)")
                 monitor.log(f"    ✓ Final memory usage: {current_memory_kb:,} KB")
                 monitor.log(f"    ✓ Index state: {state}, queue: {mutation_queue_size}, backfill: {backfill_complete_percent:.1f}%")
-                state_name = "Indexing DONE:"
-                info_all = client.execute_command("info","memory")
-                monitor.log(f"{state_name}:used_memory_human={safe_get(info_all, 'used_memory_human', 'N/A')}")           
-                search_info = client.execute_command("info","modules")
-                monitor.log(f"{state_name}:search_used_memory_human={safe_get(search_info, 'search_used_memory_human', 'N/A')}")                
+                memory_summary = get_memory_info_summary(client)
+                log_memory_info(monitor, memory_summary, "Indexing DONE:")               
                 sys.stdout.flush()  # Ensure immediate output
                 return
                 
             time.sleep(1)  # Check every 1 second for more responsive monitoring
 
         monitor.log(f"    ⚠ Warning: Indexing timeout after {timeout}s, proceeding anyway")
-        state_name = "Indexing NOT DONE:"
-        info_all = client.execute_command("info","memory")
-        monitor.log(f"{state_name}:used_memory_human={safe_get(info_all, 'used_memory_human', 'N/A')}")           
-        search_info = client.execute_command("info","modules")
-        monitor.log(f"{state_name}:search_used_memory_human={safe_get(search_info, 'search_used_memory_human', 'N/A')}")  
+        memory_summary = get_memory_info_summary(client)
+        log_memory_info(monitor, memory_summary, "Indexing NOT DONE:")
         sys.stdout.flush()  # Ensure immediate output
     
     def run_benchmark_scenario(self, scenario: BenchmarkScenario, monitor: ProgressMonitor = None, use_async: bool = True) -> Dict:
@@ -1948,22 +2004,20 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             assert current_keys == 0, f"Expected empty dataset before starting scenario, dataset size is not zero keys: {current_keys}"
                
                
-            memory_info = client.info("memory")
-            total_memory = safe_get(memory_info, 'used_memory', 0)
-            # Measure baseline
-            baseline_memory = safe_get(memory_info, 'used_memory', 0)
-            info_all = client.execute_command("info","memory")
-            search_info = client.execute_command("info","modules")
+            memory_summary = get_memory_info_summary(client)
+            total_memory = memory_summary['used_memory']
+            baseline_memory = memory_summary['used_memory']
             
             monitor.log("📊 BASELINE MEASUREMENTS")
             monitor.log("─" * 50)
-            monitor.log(f"💾 System Memory: {safe_get(info_all, 'used_memory_human', 'N/A')}")
-            monitor.log(f"🔍 Search Memory: {safe_get(search_info, 'search_used_memory_human', 'N/A')}")
+            log_memory_info(monitor, memory_summary)
             monitor.log(f"📈 Baseline: {baseline_memory // 1024:,} KB")
             monitor.log("")
             
             # Log memory estimates
             estimates = self.estimate_memory_usage(scenario, monitor)
+            monitor.log("─" * 50)
+            monitor.log("─" * 50)
             monitor.log("🎯 ESTIMATED USAGE")
             monitor.log("─" * 50)
             monitor.log(f"📁 Data Memory:      {estimates['data_memory'] // (1024**2):,} MB")
@@ -1971,6 +2025,8 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log(f"🎯 Vector Index:     {estimates['vector_index_memory'] // (1024**2):,} MB")
             monitor.log(f"💰 Total (overhead): {estimates['total_memory'] // (1024**2):,} MB")
             monitor.log("")
+            monitor.log("─" * 50)
+            monitor.log("─" * 50)
             
             # Create schema and generator
             index_name = f"idx_{scenario.name.lower().replace(' ', '_')}"
@@ -2096,8 +2152,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 insertion_time = time.time() - insertion_start_time
             
             total_keys_inserted = keys_processed.get()
-            info_all = client.execute_command("info","memory")
-            search_info = client.execute_command("info","modules")
+            memory_summary = get_memory_info_summary(client)
             
             # Clear any ongoing status updates since insertion is complete
             monitor.update_status({})
@@ -2107,8 +2162,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log(f"📊 Keys Inserted: {total_keys_inserted:,}")
             monitor.log(f"⏱️  Time Taken: {insertion_time:.1f}s")
             monitor.log(f"🚀 Speed: {total_keys_inserted/insertion_time:.0f} keys/sec")
-            monitor.log(f"💾 System Memory: {safe_get(info_all, 'used_memory_human', 'N/A')}")
-            monitor.log(f"🔍 Search Memory: {safe_get(search_info, 'search_used_memory_human', 'N/A')}")
+            log_memory_info(monitor, memory_summary)
             monitor.log("")
             
             # Log distribution statistics
@@ -2174,8 +2228,8 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 monitor.log("")
             
             # Measure memory after data insertion
-            memory_info = client.execute_command("info", "memory")
-            data_memory = safe_get(memory_info, 'used_memory', 0)
+            data_memory_summary = get_memory_info_summary(client)
+            data_memory = data_memory_summary['used_memory']
             data_memory_kb = data_memory // 1024
 
             monitor.log("🏗️  INDEX CREATION PHASE")
@@ -2195,8 +2249,8 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             # Wait for indexing
             self.wait_for_indexing(client, index_name, scenario.total_keys, monitor)            
             # Measure final memory
-            memory_info = client.execute_command("info", "memory")
-            final_memory = safe_get(memory_info, 'used_memory_dataset', 0)
+            final_memory_summary = get_memory_info_summary(client)
+            final_memory = final_memory_summary['used_memory_dataset']
             total_memory_kb = final_memory // 1024
             index_overhead_kb = (final_memory - data_memory) // 1024
             
@@ -2572,27 +2626,49 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             #     numeric_fields={"score": (0.0, 100.0), "timestamp": (1000000000.0, 2000000000.0), "rating": (1.0, 5.0)}
             # ),
             
-            # Mixed Scenario - Combined effects
+            # # Mixed Scenario - Combined effects
+            # BenchmarkScenario(
+            #     name="HNSW_wNumeric_HighShare_HighPrefix",
+            #     total_keys=100000,
+            #     tags_config=TagsConfig(
+            #         num_keys=100000,
+            #         tags_per_key=TagDistribution(avg=1, min=1, max=1),
+            #         tag_length=LengthConfig(avg=64, min=64, max=64),
+            #         tag_prefix=PrefixConfig(
+            #             enabled=True,
+            #             min_shared=48,  # 75% prefix sharing
+            #             max_shared=48,
+            #             share_probability=0.95,  # Very high prefix reuse
+            #             prefix_pool_size=2  # Only 2 different prefixes
+            #         ),
+            #         sharing=TagSharingConfig(
+            #             mode=TagSharingMode.SHARED_POOL,
+            #             pool_size=100  # High sharing: 400 keys per tag
+            #         )
+            #     ),
+            #     description="Mixed: High tag sharing + 75% prefix overlap, 40K keys + 1500-dim vectors + 4 numeric fields",
+            #     vector_dim=1500,
+            #     vector_algorithm=VectorAlgorithm.HNSW,
+            #     vector_metric=VectorMetric.COSINE,
+            #     include_numeric=True,
+            #     numeric_fields={
+            #         "score": (0.0, 100.0),
+            #         "timestamp": (1000000000.0, 2000000000.0),
+            #         "priority": (1.0, 10.0),
+            #         "confidence": (0.0, 1.0)
+            #     }
+            # ),
+            # # Mixed Scenario - Combined effects
             BenchmarkScenario(
-                name="HNSW_wNumeric_HighShare_HighPrefix",
+                name="HNSW_wNumeric_TagNotShared_noPrefixShare",
                 total_keys=100000,
                 tags_config=TagsConfig(
                     num_keys=100000,
-                    tags_per_key=TagDistribution(avg=1, min=1, max=1),
-                    tag_length=LengthConfig(avg=64, min=64, max=64),
-                    tag_prefix=PrefixConfig(
-                        enabled=True,
-                        min_shared=48,  # 75% prefix sharing
-                        max_shared=48,
-                        share_probability=0.95,  # Very high prefix reuse
-                        prefix_pool_size=2  # Only 2 different prefixes
-                    ),
-                    sharing=TagSharingConfig(
-                        mode=TagSharingMode.SHARED_POOL,
-                        pool_size=100  # High sharing: 400 keys per tag
-                    )
+                    tags_per_key=TagDistribution(avg=1, min=1, max=1),  # Exactly 1 tag per key
+                    tag_length=LengthConfig(avg=1000, min=1000, max=1000),
+                    sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
                 ),
-                description="Mixed: High tag sharing + 75% prefix overlap, 40K keys + 1500-dim vectors + 4 numeric fields",
+                description="Mixed: No Tag sharing between keys and no prefix sharing, 100K keys + 1500-dim vectors + 4 numeric fields",
                 vector_dim=1500,
                 vector_algorithm=VectorAlgorithm.HNSW,
                 vector_metric=VectorMetric.COSINE,
@@ -2604,7 +2680,6 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                     "confidence": (0.0, 1.0)
                 }
             ),
-            
             # BenchmarkScenario(
             #     name="10M_Unique",
             #     total_keys=1000000,
