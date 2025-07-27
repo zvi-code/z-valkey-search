@@ -236,7 +236,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexSchema::GetIndex(
   auto itr = attributes_.find(std::string{attribute_alias});
   if (ABSL_PREDICT_FALSE(itr == attributes_.end())) {
     return absl::NotFoundError(
-        absl::StrCat("Index field `", attribute_alias, "` not exists"));
+        absl::StrCat("Index field `", attribute_alias, "` does not exists"));
   }
   return itr->second.GetIndex();
 }
@@ -245,7 +245,8 @@ absl::StatusOr<std::string> IndexSchema::GetIdentifier(
     absl::string_view attribute_alias) const {
   auto itr = attributes_.find(std::string{attribute_alias});
   if (itr == attributes_.end()) {
-    return absl::NotFoundError("Index field not exists");
+    return absl::NotFoundError(
+        absl::StrCat("Index field `", attribute_alias, "` does not exists"));
   }
   return itr->second.GetIdentifier();
 }
@@ -255,7 +256,7 @@ absl::StatusOr<vmsdk::UniqueValkeyString> IndexSchema::DefaultReplyScoreAs(
   auto itr = attributes_.find(std::string{attribute_alias});
   if (ABSL_PREDICT_FALSE(itr == attributes_.end())) {
     return absl::NotFoundError(
-        absl::StrCat("Index field `", attribute_alias, "` not exists"));
+        absl::StrCat("Index field `", attribute_alias, "` does not exists"));
   }
   return itr->second.DefaultReplyScoreAs();
 }
@@ -368,12 +369,15 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
   }
   if (added) {
     // Track key modifications by data type
-    if (attribute_data_type_->ToProto() ==
-        data_model::ATTRIBUTE_DATA_TYPE_HASH) {
-      Metrics::GetStats().ingest_hash_keys++;
-    } else if (attribute_data_type_->ToProto() ==
-               data_model::ATTRIBUTE_DATA_TYPE_JSON) {
-      Metrics::GetStats().ingest_json_keys++;
+    switch (attribute_data_type_->ToProto()) {
+      case data_model::ATTRIBUTE_DATA_TYPE_HASH:
+        Metrics::GetStats().ingest_hash_keys++;
+        break;
+      case data_model::ATTRIBUTE_DATA_TYPE_JSON:
+        Metrics::GetStats().ingest_json_keys++;
+        break;
+      default:
+        CHECK(false);
     }
     ProcessMutation(ctx, mutated_attributes, interned_key, from_backfill);
   }
