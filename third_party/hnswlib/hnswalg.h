@@ -97,6 +97,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
   bool allow_replace_deleted_ = false;  // flag to replace deleted elements
                                         // (marked as deleted) during insertions
+  bool enable_in_place_delete_ = false; // flag to enable in-place deletion
+  size_t in_place_delete_neighbor_threshold_ = 10; // threshold for node's neighbor count to enable in-place delete
 
   std::mutex deleted_elements_lock;  // lock for deleted_elements
   std::unordered_set<tableint>
@@ -113,11 +115,15 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
   HierarchicalNSW(SpaceInterface<dist_t> *s, size_t max_elements, size_t M = 16,
                   size_t ef_construction = 200, size_t random_seed = 100,
-                  bool allow_replace_deleted = false)
+                  bool allow_replace_deleted = false,
+                  bool enable_in_place_delete = false,
+                  size_t in_place_delete_neighbor_threshold = 10)
       : label_op_locks_(MAX_LABEL_OPERATION_LOCKS),
         link_list_locks_(max_elements),
         element_levels_(max_elements),
-        allow_replace_deleted_(allow_replace_deleted) {
+        allow_replace_deleted_(allow_replace_deleted),
+        enable_in_place_delete_(enable_in_place_delete),
+        in_place_delete_neighbor_threshold_(in_place_delete_neighbor_threshold) {
     max_elements_ = max_elements;
     num_deleted_ = 0;
     vector_size_ = s->get_data_size();
@@ -938,8 +944,35 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   }
 
   /*
-   * Marks an element with the given label deleted, does NOT really change the
-   * current graph.
+   * Completely removes an element from the graph, freeing memory and removing all edges.
+   * Only used when in-place deletion is enabled and conditions are met.
+   */
+  void inPlaceDeleteInternal(tableint internalId) {
+    assert(internalId < cur_element_count_);
+    
+    // Remove all references to this node from its neighbors
+    removeNodeFromNeighbors(internalId);
+    
+    // Remove references from 2-hop neighbors 
+    remove2HopReferences(internalId);
+    
+    // Free the node's memory
+    freeNodeMemory(internalId);
+    
+    // Remove from label lookup
+    labeltype label = getExternalLabel(internalId);
+    std::unique_lock<std::mutex> lock_table(label_lookup_lock);
+    label_lookup_.erase(label);
+    lock_table.unlock();
+    
+    // Update counters
+    num_deleted_ += 1;
+    valkey_search::Metrics::GetStats().reclaimable_memory += vector_size_;
+  }
+
+  /*
+   * Marks an element with the given label deleted, or performs in-place deletion
+   * if conditions are met.
    */
   void markDelete(labeltype label) {
     // lock all operations with element by label
@@ -953,6 +986,29 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     tableint internalId = search->second;
     lock_table.unlock();
 
+    // Check if we should do in-place deletion
+    if (enable_in_place_delete_) {
+      // Don't delete entry point
+      if (internalId == enterpoint_node_) {
+        markDeletedInternal(internalId);
+        return;
+      }
+      
+      // Only delete nodes at level 0 (optional restriction)
+      if (element_levels_[internalId] > 0) {
+        markDeletedInternal(internalId);
+        return;
+      }
+      
+      // Check neighbor count threshold
+      size_t connection_count = countNodeConnections(internalId);
+      if (connection_count <= in_place_delete_neighbor_threshold_) {
+        inPlaceDeleteInternal(internalId);
+        return;
+      }
+    }
+    
+    // Fall back to soft delete
     markDeletedInternal(internalId);
   }
 
@@ -977,6 +1033,84 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       throw std::runtime_error(
           "The requested to delete element is already deleted");
     }
+  }
+
+  size_t countNodeConnections(tableint internalId) {
+    size_t total_connections = 0;
+    int node_level = element_levels_[internalId];
+    
+    for (int level = 0; level <= node_level; level++) {
+      linklistsizeint *ll = get_linklist_at_level(internalId, level);
+      total_connections += getListCount(ll);
+    }
+    return total_connections;
+  }
+
+  void removeNodeFromNeighbors(tableint node_to_remove) {
+    int node_level = element_levels_[node_to_remove];
+    
+    for (int level = 0; level <= node_level; level++) {
+      std::vector<tableint> neighbors = getConnectionsWithLock(node_to_remove, level);
+      
+      for (tableint neighbor : neighbors) {
+        std::unique_lock<std::mutex> lock(link_list_locks_[neighbor]);
+        linklistsizeint *ll_neighbor = get_linklist_at_level(neighbor, level);
+        int size = getListCount(ll_neighbor);
+        tableint *data = (tableint *)(ll_neighbor + 1);
+        
+        int write_idx = 0;
+        for (int read_idx = 0; read_idx < size; read_idx++) {
+          if (data[read_idx] != node_to_remove) {
+            data[write_idx++] = data[read_idx];
+          }
+        }
+        setListCount(ll_neighbor, write_idx);
+      }
+    }
+  }
+
+  void remove2HopReferences(tableint node_to_remove) {
+    int node_level = element_levels_[node_to_remove];
+    std::unordered_set<tableint> two_hop_neighbors;
+    
+    for (int level = 0; level <= node_level; level++) {
+      std::vector<tableint> direct_neighbors = getConnectionsWithLock(node_to_remove, level);
+      
+      for (tableint direct_neighbor : direct_neighbors) {
+        std::vector<tableint> second_hop = getConnectionsWithLock(direct_neighbor, level);
+        for (tableint second_neighbor : second_hop) {
+          if (second_neighbor != node_to_remove) {
+            two_hop_neighbors.insert(second_neighbor);
+          }
+        }
+      }
+    }
+    
+    for (tableint two_hop_node : two_hop_neighbors) {
+      for (int level = 0; level <= std::min(node_level, element_levels_[two_hop_node]); level++) {
+        std::unique_lock<std::mutex> lock(link_list_locks_[two_hop_node]);
+        linklistsizeint *ll = get_linklist_at_level(two_hop_node, level);
+        int size = getListCount(ll);
+        tableint *data = (tableint *)(ll + 1);
+        
+        int write_idx = 0;
+        for (int read_idx = 0; read_idx < size; read_idx++) {
+          if (data[read_idx] != node_to_remove) {
+            data[write_idx++] = data[read_idx];
+          }
+        }
+        setListCount(ll, write_idx);
+      }
+    }
+  }
+
+  void freeNodeMemory(tableint internalId) {
+    if (element_levels_[internalId] > 0 &&
+        *reinterpret_cast<char **>((*linkLists_)[internalId]) != nullptr) {
+      delete[] (*reinterpret_cast<char **>((*linkLists_)[internalId]));
+      *reinterpret_cast<char **>((*linkLists_)[internalId]) = nullptr;
+    }
+    element_levels_[internalId] = -1;
   }
 
   /*
