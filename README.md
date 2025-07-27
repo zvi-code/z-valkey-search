@@ -56,11 +56,7 @@ valkey-search includes an operational feature to mitigate issues in indexes. If 
 
 The config is non-modifiable and should be provided to search module on load.
 ```sh
-valkey-server --loadmodule /path/to/libsearch.so --rdb-load-skip-index yes
-```
-
-```sh
-CONFIG GET search.rdb-load-skip-index
+valkey-server --loadmodule /path/to/libsearch.so --skip-rdb-load yes
 ```
 
 ### Benefits
