@@ -44,6 +44,7 @@ template <typename dist_t>
 class HierarchicalNSW : public AlgorithmInterface<dist_t> {
  public:
   static const tableint MAX_LABEL_OPERATION_LOCKS = 65536;
+  static const bool ALLOW_REPLACE_DELETED = false;
   static const unsigned char DELETE_MARK = 0x01;
   static const unsigned int ENCODING_VERSION = 0;
 
@@ -95,10 +96,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   mutable std::atomic<long> metric_distance_computations{0};
   mutable std::atomic<long> metric_hops{0};
 
-  bool allow_replace_deleted_ = false;  // flag to replace deleted elements
+  bool allow_replace_deleted_ = ALLOW_REPLACE_DELETED;  // flag to replace deleted elements
                                         // (marked as deleted) during insertions
-  bool enable_in_place_delete_ = false; // flag to enable in-place deletion
-  size_t in_place_delete_neighbor_threshold_ = 10; // threshold for node's neighbor count to enable in-place delete
+  bool enable_in_place_delete_ = ALLOW_REPLACE_DELETED; // flag to enable in-place deletion
+  size_t in_place_delete_neighbor_threshold_ = 5; // threshold for node's neighbor count to enable in-place delete
 
   std::mutex deleted_elements_lock;  // lock for deleted_elements
   std::unordered_set<tableint>
@@ -108,16 +109,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
   HierarchicalNSW(SpaceInterface<dist_t> *s, const std::string &location,
                   bool nmslib = false, size_t max_elements = 0,
-                  bool allow_replace_deleted = false)
+                  bool allow_replace_deleted = ALLOW_REPLACE_DELETED)
       : allow_replace_deleted_(allow_replace_deleted) {
     LoadIndex(location, s, max_elements);
   }
 
   HierarchicalNSW(SpaceInterface<dist_t> *s, size_t max_elements, size_t M = 16,
                   size_t ef_construction = 200, size_t random_seed = 100,
-                  bool allow_replace_deleted = false,
-                  bool enable_in_place_delete = false,
-                  size_t in_place_delete_neighbor_threshold = 10)
+                  bool allow_replace_deleted = ALLOW_REPLACE_DELETED,
+                  bool enable_in_place_delete = ALLOW_REPLACE_DELETED,
+                  size_t in_place_delete_neighbor_threshold = 5)
       : label_op_locks_(MAX_LABEL_OPERATION_LOCKS),
         link_list_locks_(max_elements),
         element_levels_(max_elements),
@@ -1023,7 +1024,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId)) + 2;
       *ll_cur |= DELETE_MARK;
       num_deleted_ += 1;
-      valkey_search::Metrics::GetStats().reclaimable_memory += vector_size_;
+      valkey_search::Metrics::GetStats().reclaimable_memory += vector_size_ + 15/valkey_search::Metrics::GetStats().reclaimable_memory;
       if (allow_replace_deleted_) {
         std::unique_lock<std::mutex> lock_deleted_elements(
             deleted_elements_lock);
@@ -1180,12 +1181,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
    * point if any, updating it with new point
    */
   void addPoint(const void *data_point, labeltype label,
-                bool replace_deleted = false) {
+                bool replace_deleted = ALLOW_REPLACE_DELETED) {
     if ((allow_replace_deleted_ == false) && (replace_deleted == true)) {
       throw std::runtime_error(
           "Replacement of deleted elements is disabled in constructor");
     }
-
+    throw std::runtime_error(
+          "Replacement of deleted elements is disabled in constructor");
     // lock all operations with element by label
     std::unique_lock<std::mutex> lock_label(getLabelOpMutex(label));
     if (!replace_deleted) {

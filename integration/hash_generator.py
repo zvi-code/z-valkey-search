@@ -199,37 +199,10 @@ class HashKeyGenerator:
             self.config.key_length = LengthConfig(avg=10, min=8, max=15)
     
     def _initialize_generators(self):
-        """Initialize all required generators"""
-        # Key generator
-        key_config = GeneratorConfig(
-            count=self.config.num_keys,
-            string_type=self.config.key_string_type,
-            length=self.config.key_length,
-            batch_size=self.config.batch_size,
-            seed=None  # Use current random state
-        )
-        self._key_generator = StringGenerator(key_config)
-        
-        # Tags generator (if needed)
-        if self.config.tags_config:
-            self.config.tags_config.num_keys = self.config.num_keys
-            self.config.tags_config.batch_size = self.config.batch_size
-            self._tags_generator = TagsBuilder(self.config.tags_config)
-        
-        # Initialize other field generators and validate configurations
+        """Initialize and validate configurations without creating sub-generators"""
+        # Only validate configurations - no actual generator creation
         for field in self.config.schema.fields:
-            if field.type == FieldType.TEXT:
-                # Text field generator
-                text_config = GeneratorConfig(
-                    count=self.config.num_keys,
-                    string_type=StringType.ASCII,
-                    length=LengthConfig(avg=50, min=20, max=100),
-                    batch_size=self.config.batch_size,
-                    seed=None
-                )
-                self._field_generators[field.name] = StringGenerator(text_config)
-            
-            elif field.type == FieldType.NUMERIC:
+            if field.type == FieldType.NUMERIC:
                 # Validate numeric configuration
                 if field.numeric_range:
                     min_val, max_val = field.numeric_range
@@ -323,78 +296,147 @@ class HashKeyGenerator:
         lat = np.random.uniform(-90, 90)
         return f"{lon:.6f},{lat:.6f}"
     
+    def _generate_fields(self, key_index: int) -> Dict[str, Any]:
+        """
+        Generate fields for a single key on-demand.
+        This allows for lazy generation without pre-materializing data.
+        """
+        fields = {}
+        
+        # Generate fields based on schema
+        for field in self.config.schema.fields:
+            if field.type == FieldType.VECTOR:
+                # Generate vector
+                vec = self._generate_vector(
+                    field.vector_config.dim,
+                    field.vector_config.distance_metric
+                )
+                fields[field.name] = vec
+            
+            elif field.type == FieldType.TAG:
+                # Generate tags on-demand without pre-materialization
+                if self.config.tags_config:
+                    # Generate tags based on key index for consistency
+                    tags = self._generate_tags_for_key(key_index)
+                    fields[field.name] = tags
+            
+            elif field.type == FieldType.TEXT:
+                # Generate text on-demand
+                text_length = self._get_text_length_for_key(key_index)
+                text = self._generate_text_content(text_length)
+                fields[field.name] = text
+            
+            elif field.type == FieldType.NUMERIC:
+                fields[field.name] = self._generate_numeric_value(field)
+            
+            elif field.type == FieldType.GEO:
+                fields[field.name] = self._generate_geo_value()
+        
+        # Add any additional fields
+        fields.update(self.config.additional_fields)
+        
+        return fields
+    
+    def _generate_tags_for_key(self, key_index: int) -> str:
+        """Generate tags for a specific key index without pre-materialization"""
+        if not self.config.tags_config:
+            return ""
+        
+        tags_config = self.config.tags_config
+        sharing = tags_config.sharing
+        
+        # Determine number of tags for this key
+        np.random.seed(self.config.seed + key_index if self.config.seed else key_index)
+        num_tags = np.random.randint(
+            tags_config.tags_per_key.min,
+            tags_config.tags_per_key.max + 1
+        )
+        
+        tags = []
+        
+        if sharing.mode == TagSharingMode.UNIQUE:
+            # Generate unique tags for this key
+            base_tag_index = key_index * tags_config.tags_per_key.avg
+            for i in range(num_tags):
+                tag = self._generate_single_tag(base_tag_index + i)
+                tags.append(tag)
+        
+        elif sharing.mode == TagSharingMode.SHARED_POOL:
+            # Select from a virtual pool without materializing it
+            pool_size = sharing.pool_size or max(10, self.config.num_keys // 10)
+            for i in range(num_tags):
+                # Use consistent hashing to select tags from virtual pool
+                tag_index = (key_index * 31 + i * 17) % pool_size
+                tag = self._generate_single_tag(tag_index)
+                tags.append(tag)
+        
+        elif sharing.mode == TagSharingMode.PERFECT_OVERLAP:
+            # All keys get the same tags
+            for i in range(num_tags):
+                tag = self._generate_single_tag(i)
+                tags.append(tag)
+        
+        elif sharing.mode == TagSharingMode.GROUP_BASED:
+            # Keys in same group share tags
+            keys_per_group = sharing.keys_per_group or 100
+            group_id = key_index // keys_per_group
+            tags_per_group = sharing.tags_per_group or 10
+            
+            # Select tags for this group
+            base_tag_index = group_id * tags_per_group
+            tag_indices = np.random.choice(tags_per_group, size=num_tags, replace=False)
+            for idx in tag_indices:
+                tag = self._generate_single_tag(base_tag_index + idx)
+                tags.append(tag)
+        
+        return ','.join(tags)
+    
+    def _generate_single_tag(self, tag_index: int) -> str:
+        """Generate a single tag based on its index"""
+        # Use deterministic generation based on tag index
+        np.random.seed(tag_index)
+        
+        tag_length = self.config.tags_config.tag_length
+        length = np.random.randint(tag_length.min, tag_length.max + 1)
+        
+        if self.config.tags_config.tag_string_type == StringType.ALPHANUMERIC:
+            chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
+            tag = ''.join(np.random.choice(list(chars), size=length))
+        else:
+            # Default to random bytes
+            tag = f"tag_{tag_index:08d}"
+        
+        return tag
+    
+    def _get_text_length_for_key(self, key_index: int) -> int:
+        """Get text length for a specific key without pre-materialization"""
+        np.random.seed(self.config.seed + key_index if self.config.seed else key_index)
+        return np.random.randint(20, 100)
+    
+    def _generate_text_content(self, length: int) -> str:
+        """Generate text content of specified length"""
+        chars = 'abcdefghijklmnopqrstuvwxyz '
+        return ''.join(np.random.choice(list(chars), size=length))
+    
     def __iter__(self) -> Iterator[List[Tuple[str, Dict[str, Any]]]]:
         """
-        Iterator returning batches of (key, fields) tuples.
-        Fields are returned as a dict mapping field names to values.
+        Truly lazy iterator returning batches of (key, fields) tuples.
+        Generates data on-demand without pre-materialization.
         """
-        # Create iterators
-        key_iter = iter(self._key_generator)
-        tags_iter = iter(self._tags_generator) if self._tags_generator else None
-        text_iters = {
-            name: iter(gen) for name, gen in self._field_generators.items()
-        }
-        
         keys_generated = 0
         
         while keys_generated < self.config.num_keys:
             batch_size = min(self.config.batch_size, self.config.num_keys - keys_generated)
             batch = []
             
-            # Get batches from all generators
-            try:
-                key_batch = next(key_iter)
-                tags_batch = next(tags_iter) if tags_iter else None
-                text_batches = {
-                    name: next(iter_) for name, iter_ in text_iters.items()
-                }
-            except StopIteration:
-                break
-            
-            # Build hash entries
-            for i in range(min(len(key_batch), batch_size)):
-                # Generate key with prefix
-                key_suffix = key_batch[i]
-                if isinstance(key_suffix, bytes):
-                    key_suffix = key_suffix.decode('utf-8', errors='replace')
-                key = f"{self.config.key_prefix}{key_suffix}"
+            for i in range(batch_size):
+                key_index = keys_generated + i
                 
-                # Build fields dict
-                fields = {}
+                # Generate key
+                key = f"{self.config.key_prefix}{key_index:08d}"
                 
-                # Add fields based on schema
-                for field in self.config.schema.fields:
-                    if field.type == FieldType.VECTOR:
-                        # Generate vector
-                        vec = self._generate_vector(
-                            field.vector_config.dim,
-                            field.vector_config.distance_metric
-                        )
-                        fields[field.name] = vec
-                    
-                    elif field.type == FieldType.TAG:
-                        # Use tags from generator
-                        if tags_batch and i < len(tags_batch):
-                            fields[field.name] = tags_batch[i]
-                    
-                    elif field.type == FieldType.TEXT:
-                        # Use text from generator
-                        if field.name in text_batches:
-                            text_batch = text_batches[field.name]
-                            if i < len(text_batch):
-                                text = text_batch[i]
-                                if isinstance(text, bytes):
-                                    text = text.decode('utf-8', errors='replace')
-                                fields[field.name] = text
-                    
-                    elif field.type == FieldType.NUMERIC:
-                        fields[field.name] = self._generate_numeric_value(field)
-                    
-                    elif field.type == FieldType.GEO:
-                        fields[field.name] = self._generate_geo_value()
-                
-                # Add any additional fields
-                fields.update(self.config.additional_fields)
+                # Generate fields on-demand
+                fields = self._generate_fields(key_index)
                 
                 batch.append((key, fields))
             
