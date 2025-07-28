@@ -812,6 +812,38 @@ class ProgressMonitor:
         self.last_reclaimable_memory = 0
         self.stall_callback = None  # Optional callback when stall detected
         
+    def _safe_extract_speed(self, speed_str: str) -> str:
+        """Safely extract numeric speed value from string like '2567 keys/sec'"""
+        try:
+            if isinstance(speed_str, str) and 'keys/sec' in speed_str:
+                return speed_str.replace(' keys/sec', '').strip()
+            return str(speed_str) if speed_str else ''
+        except:
+            return ''
+    
+    def _safe_extract_tasks(self, tasks_str: str) -> str:
+        """Safely extract tasks value from string like '200 async'"""
+        try:
+            if isinstance(tasks_str, str) and ' async' in tasks_str:
+                return tasks_str.replace(' async', '').strip()
+            return str(tasks_str) if tasks_str else ''
+        except:
+            return ''
+    
+    def _safe_to_int(self, value) -> int:
+        """Safely convert value to int with fallback"""
+        try:
+            if isinstance(value, (int, float)):
+                return int(value)
+            elif isinstance(value, str):
+                # Remove any non-numeric characters except minus
+                import re
+                numeric_str = re.sub(r'[^\d-]', '', value)
+                return int(numeric_str) if numeric_str else 0
+            return 0
+        except:
+            return 0
+        
     def start(self):
         """Start the monitoring thread"""
         self.running = True
@@ -1170,9 +1202,9 @@ class ProgressMonitor:
                                 'search_used_memory_kb': search_memory_kb,
                                 'search_index_reclaimable_memory_kb': reclaimable_memory_kb,
                                 'keys_count': current_keys,
-                                'speed': self.current_status.get('Speed', '').replace(' keys/sec', '') if self.current_status and 'Speed' in self.current_status else '',
+                                'speed': self._safe_extract_speed(self.current_status.get('Speed', '')) if self.current_status else '',
                                 'eta': self.current_status.get('ETA', '') if self.current_status else '',
-                                'tasks': self.current_status.get('Tasks', '') if self.current_status else '',
+                                'tasks': self._safe_extract_tasks(self.current_status.get('Tasks', '')) if self.current_status else '',
                                 'progress': self.current_status.get('Progress', '') if self.current_status else '',
                                 'phase_progress': '',  # Can be populated from phase-specific status
                                 'phase_speed': '',     # Can be populated from phase-specific status
@@ -1217,8 +1249,8 @@ class ProgressMonitor:
                                 for idx_name, info in index_info.items():
                                     # Get runtime index state
                                     csv_row['index_state'] = info.get('state', '')
-                                    csv_row['index_num_docs'] = int(info.get('num_docs', 0))
-                                    csv_row['index_mutation_queue'] = int(info.get('mutation_queue_size', 0))
+                                    csv_row['index_num_docs'] = self._safe_to_int(info.get('num_docs', 0))
+                                    csv_row['index_mutation_queue'] = self._safe_to_int(info.get('mutation_queue_size', 0))
                                     break  # Only process first index
                             
                             # Write the row
@@ -1444,23 +1476,44 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         return log_filename
     
     def append_to_csv(self, csv_filename: str, result: Dict, monitor: ProgressMonitor = None, write_header: bool = False):
-        """Append a result to CSV file incrementally"""
+        """Append a result to CSV file incrementally with consistent headers"""
         # Add timestamp to the result
         result['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Define fixed header order for consistent CSV structure
+        fixed_headers = [
+            'timestamp', 'scenario_name', 'description', 'total_keys', 'total_memory_kb', 
+            'search_memory_kb', 'reclaimable_memory_kb', 'insertion_time', 'keys_per_second',
+            # Index metadata
+            'vector_dim', 'vector_algorithm', 'hnsw_m', 'num_tag_fields', 'num_numeric_fields',
+            # Tag configuration 
+            'tag_avg_length', 'tag_prefix_sharing', 'tag_avg_per_key', 'tag_avg_keys_per_tag',
+            'tag_unique_ratio', 'tag_reuse_factor', 'tag_sharing_mode',
+            # Numeric fields
+            'numeric_fields_names', 'numeric_fields_ranges',
+            # Memory accuracy
+            'tag_memory_accuracy', 'total_memory_accuracy',
+            # Additional fields that might be present
+            'tags_config', 'index_state', 'phase_time'
+        ]
         
         # Check if file exists
         file_exists = os.path.exists(csv_filename)
         
-        # Write to CSV
-        with open(csv_filename, 'a') as f:
-            headers = list(result.keys())
+        # Write to CSV with consistent structure
+        with open(csv_filename, 'a', newline='', encoding='utf-8') as f:
+            import csv
+            writer = csv.DictWriter(f, fieldnames=fixed_headers, extrasaction='ignore')
             
             # Write header if needed (new file or explicitly requested)
             if write_header or not file_exists:
-                f.write(','.join(headers) + '\n')
+                writer.writeheader()
             
-            # Write the data row
-            f.write(','.join(str(result.get(h, '')) for h in headers) + '\n')
+            # Ensure all required fields have default values
+            complete_row = {header: result.get(header, '') for header in fixed_headers}
+            
+            # Write the data row  
+            writer.writerow(complete_row)
         
         # Log through monitor if available, otherwise use direct logging
         if monitor:
@@ -2672,37 +2725,37 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             # Export dataset to CSV files for analysis
             hashes_csv = ""
             tags_csv = ""
-            if scenario.total_keys <= 100000:  # Only export for smaller datasets to avoid huge files
-                monitor.log("📁 DATASET EXPORT")
-                monitor.log("─" * 50)
-                export_start = time.time()
+            # if scenario.total_keys <= 100000:  # Only export for smaller datasets to avoid huge files
+            #     monitor.log("📁 DATASET EXPORT")
+            #     monitor.log("─" * 50)
+            #     export_start = time.time()
                 
-                # Get timestamp from current scenario
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            #     # Get timestamp from current scenario
+            #     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 
-                # Create a client without decode_responses for proper binary handling
-                export_client = SilentValkeyClient(
-                    host=client.connection_pool.connection_kwargs['host'],
-                    port=client.connection_pool.connection_kwargs['port'],
-                    decode_responses=False  # Important for binary data
-                )
-                hashes_csv = ""
-                tags_csv = ""
-                # try:
-                #     hashes_csv, tags_csv = self.export_dataset_to_csv(
-                #         export_client, 
-                #         prefix="key:",  # Assuming standard prefix
-                #         scenario_name=scenario.name,
-                #         timestamp=timestamp,
-                #         monitor=monitor
-                #     )
-                #     export_time = time.time() - export_start
-                #     monitor.log(f"⏱️  Export time: {export_time:.1f}s")
-                # finally:
-                #     assert export_client is not None
-                #     export_client.close()
+            #     # Create a client without decode_responses for proper binary handling
+            #     export_client = SilentValkeyClient(
+            #         host=client.connection_pool.connection_kwargs['host'],
+            #         port=client.connection_pool.connection_kwargs['port'],
+            #         decode_responses=False  # Important for binary data
+            #     )
+            #     hashes_csv = ""
+            #     tags_csv = ""
+            #     # try:
+            #     #     hashes_csv, tags_csv = self.export_dataset_to_csv(
+            #     #         export_client, 
+            #     #         prefix="key:",  # Assuming standard prefix
+            #     #         scenario_name=scenario.name,
+            #     #         timestamp=timestamp,
+            #     #         monitor=monitor
+            #     #     )
+            #     #     export_time = time.time() - export_start
+            #     #     monitor.log(f"⏱️  Export time: {export_time:.1f}s")
+            #     # finally:
+            #     #     assert export_client is not None
+            #     #     export_client.close()
 
-                monitor.log("")
+            #     monitor.log("")
             
             # Measure memory after data insertion
             data_memory_summary = get_memory_info_summary(client)
@@ -2795,6 +2848,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 'estimated_numeric_memory_kb': memory_breakdown['numeric_index_memory_kb'],
                 'search_used_memory_kb': search_memory_kb,  # Add missing field for fuzzy test
                 'search_index_reclaimable_memory_kb': search_reclaimed_kb,
+                # Add fields with names that match CSV headers
+                'search_memory_kb': search_memory_kb,
+                'reclaimable_memory_kb': search_reclaimed_kb,
                 'tag_memory_accuracy': (estimated_tag_memory_kb / max(1, actual_tag_memory_kb)) if actual_tag_memory_kb > 0 else 0,
                 'total_memory_accuracy': (estimated_total_kb / max(1, search_memory_kb)) if search_memory_kb > 0 else 0,
                 'vector_memory_kb': vector_memory_kb,
@@ -2805,6 +2861,32 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 'insertion_time_sec': insertion_time,  # Add for fuzzy test compatibility
                 'keys_per_second': total_keys_inserted/insertion_time if insertion_time > 0 else 0,  # Add for fuzzy test
                 'tags_config': str(scenario.tags_config.sharing.mode.value),
+                
+                # Detailed scenario configuration - Add missing fields for CSV
+                'vector_dim': scenario.vector_dim,
+                'vector_algorithm': scenario.vector_algorithm.name if hasattr(scenario.vector_algorithm, 'name') else str(scenario.vector_algorithm),
+                'vector_metric': scenario.vector_metric.name if hasattr(scenario.vector_metric, 'name') else str(scenario.vector_metric),
+                'hnsw_m': scenario.hnsw_m if (hasattr(scenario.vector_algorithm, 'name') and scenario.vector_algorithm.name == 'HNSW') or (str(scenario.vector_algorithm) == 'HNSW') else '',
+                'num_tag_fields': 1,  # Always have tags field
+                'num_numeric_fields': len(scenario.numeric_fields) if scenario.numeric_fields else 0,
+                
+                # Tag configuration details
+                'tag_avg_length': scenario.tags_config.tag_length.avg if scenario.tags_config and scenario.tags_config.tag_length else 0,
+                'tag_prefix_sharing': scenario.tags_config.tag_prefix.share_probability if scenario.tags_config and scenario.tags_config.tag_prefix else 0,
+                'tag_avg_per_key': scenario.tags_config.tags_per_key.avg if scenario.tags_config and scenario.tags_config.tags_per_key else 0,
+                'tag_avg_keys_per_tag': dist_stats['tag_usage']['mean_keys_per_tag'] if 'tag_usage' in dist_stats else 0,
+                'tag_unique_ratio': (dist_stats['tag_usage']['unique_tags'] / max(1, total_keys_inserted * scenario.tags_config.tags_per_key.avg)) if scenario.tags_config and scenario.tags_config.tags_per_key and 'tag_usage' in dist_stats else 0,
+                'tag_reuse_factor': (total_keys_inserted * scenario.tags_config.tags_per_key.avg / max(1, dist_stats['tag_usage']['unique_tags'])) if scenario.tags_config and scenario.tags_config.tags_per_key and 'tag_usage' in dist_stats else 1.0,
+                'tag_sharing_mode': scenario.tags_config.sharing.mode.name if scenario.tags_config and scenario.tags_config.sharing and hasattr(scenario.tags_config.sharing.mode, 'name') else str(scenario.tags_config.sharing.mode) if scenario.tags_config and scenario.tags_config.sharing else 'unique',
+                
+                # Numeric fields info
+                'numeric_fields_names': ', '.join(scenario.numeric_fields.keys()) if scenario.numeric_fields else '',
+                'numeric_fields_ranges': str(scenario.numeric_fields) if scenario.numeric_fields else '',
+                
+                # Additional CSV fields
+                'index_state': 'completed',  # Could be extracted from FT.INFO if needed
+                'phase_time': insertion_time,
+                
                 # Memory breakdown components
                 'valkey_core_kb': memory_breakdown['valkey_total_kb'],
                 'key_interning_kb': memory_breakdown['key_interning_memory_kb'],
@@ -2940,7 +3022,30 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 'description': scenario.description,
                 'total_keys': scenario.total_keys,
                 'skipped': True,
-                'reason': f"Failed: {str(e)}"
+                'reason': f"Failed: {str(e)}",
+                
+                # Add basic configuration for failed scenarios too
+                'vector_dim': scenario.vector_dim,
+                'vector_algorithm': scenario.vector_algorithm.name if hasattr(scenario.vector_algorithm, 'name') else str(scenario.vector_algorithm),
+                'hnsw_m': scenario.hnsw_m if (hasattr(scenario.vector_algorithm, 'name') and scenario.vector_algorithm.name == 'HNSW') or (str(scenario.vector_algorithm) == 'HNSW') else '',
+                'num_tag_fields': 1,
+                'num_numeric_fields': len(scenario.numeric_fields) if scenario.numeric_fields else 0,
+                'tag_avg_length': scenario.tags_config.tag_length.avg if scenario.tags_config and scenario.tags_config.tag_length else 0,
+                'tag_prefix_sharing': scenario.tags_config.tag_prefix.share_probability if scenario.tags_config and scenario.tags_config.tag_prefix else 0,
+                'tag_avg_per_key': scenario.tags_config.tags_per_key.avg if scenario.tags_config and scenario.tags_config.tags_per_key else 0,
+                'tag_sharing_mode': scenario.tags_config.sharing.mode.name if scenario.tags_config and scenario.tags_config.sharing and hasattr(scenario.tags_config.sharing.mode, 'name') else str(scenario.tags_config.sharing.mode) if scenario.tags_config and scenario.tags_config.sharing else 'unique',
+                'numeric_fields_names': ', '.join(scenario.numeric_fields.keys()) if scenario.numeric_fields else '',
+                'numeric_fields_ranges': str(scenario.numeric_fields) if scenario.numeric_fields else '',
+                # Add empty fields for failed scenarios to match CSV structure
+                'search_memory_kb': 0,
+                'reclaimable_memory_kb': 0,
+                'insertion_time': 0,
+                'keys_per_second': 0,
+                'total_memory_kb': 0,
+                'tag_memory_accuracy': 0,
+                'total_memory_accuracy': 0,
+                'index_state': 'failed',
+                'phase_time': 0,
             }
             assert False, f"Scenario {scenario.name} failed: {e}"
             
@@ -3808,22 +3913,30 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         # Set up file logging
         log_file = self.setup_file_logging("tag_memory_patterns")
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        csv_filename = f"tag_memory_results_{timestamp}.csv"
-        monitor_csv_filename = f"tag_memory_patterns_monitoring_{timestamp}.csv"
-        # Create a simple monitor for overall progress logging
-        monitor = ProgressMonitor(self.server, monitor_csv_filename, "tag_memory_patterns")
+        
+        # Two CSV files as expected:
+        # 1. Monitor CSV: consolidated time-based data from all scenarios
+        monitor_csv_filename = f"tag_memory_patterns_monitor_{timestamp}.csv"
+        # 2. Summary CSV: one line per scenario with final results  
+        summary_csv_filename = f"tag_memory_patterns_summary_{timestamp}.csv"
+        
+        # Create main monitor for logging only (no CSV monitoring)
+        log_filename = f"tag_memory_patterns_log_{timestamp}.log"
+        monitor = ProgressMonitor(self.server, log_filename, "tag_memory_patterns")
         monitor.start()
         monitor.log("=== TAG MEMORY PATTERNS BENCHMARK ===")
         monitor.log("Testing systematic variations in tag patterns to understand memory impact")
-        monitor.log("Base config: 8-dim vectors, FLAT algorithm, no numeric fields\n")
+        monitor.log("Base config: 8-dim vectors, FLAT algorithm, no numeric fields")
+        monitor.log(f"Monitor CSV (time-series data): {monitor_csv_filename}")
+        monitor.log(f"Summary CSV (per-scenario results): {summary_csv_filename}\n")
 
         # Define comprehensive test scenarios
         scenarios = []
         
         # 1. Unique Tags Tests - scaling keys, tag length, and tags per key
-        base_keys = [1000, 5000, 10000, 50000]
+        base_keys = [1000, 50000, 100000, 500000]
         tag_lengths = [10, 50, 100, 500, 1000]
-        tags_per_key_values = [1, 2, 5, 10]
+        tags_per_key_values = [1, 2, 50, 100]
         
         for keys in base_keys:
             for tag_len in tag_lengths:
@@ -3842,7 +3955,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                     vector_metric=VectorMetric.COSINE,
                 ))
         
-        for keys in [10000]:  # Fixed key count for tags per key variation
+        for keys in [1000000]:  # Fixed key count for tags per key variation
             for tpk in tags_per_key_values:
                 scenarios.append(BenchmarkScenario(
                     name=f"Unique_Keys{keys}_TagsPerKey{tpk}",
@@ -3861,14 +3974,14 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         # 2. Tag Sharing Tests - varying sharing ratios and group sizes
         sharing_ratios = [0.1, 0.25, 0.5, 0.75, 0.9]  # 10% to 90% sharing
-        group_sizes = [10, 50, 100, 500]
+        group_sizes = [10, 500, 1000, 5000]
         
         for ratio in sharing_ratios:
             scenarios.append(BenchmarkScenario(
                 name=f"Sharing_Ratio{int(ratio*100)}pct",
-                total_keys=10000,
+                total_keys=1000000,
                 tags_config=TagsConfig(
-                    num_keys=10000,
+                    num_keys=1000000,
                     tags_per_key=TagDistribution(avg=2, min=2, max=2),
                     tag_length=LengthConfig(avg=100, min=100, max=100),
                     sharing=TagSharingConfig(
@@ -3886,9 +3999,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         for group_size in group_sizes:
             scenarios.append(BenchmarkScenario(
                 name=f"GroupBased_Size{group_size}",
-                total_keys=10000,
+                total_keys=1000000,
                 tags_config=TagsConfig(
-                    num_keys=10000,
+                    num_keys=1000000,
                     tags_per_key=TagDistribution(avg=3, min=3, max=3),
                     tag_length=LengthConfig(avg=100, min=100, max=100),
                     sharing=TagSharingConfig(
@@ -3933,7 +4046,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         for pool_size in prefix_pool_sizes:
             scenarios.append(BenchmarkScenario(
                 name=f"PrefixPool_{pool_size}",
-                total_keys=10000,
+                total_keys=1000000,
                 tags_config=TagsConfig(
                     num_keys=10000,
                     tags_per_key=TagDistribution(avg=2, min=2, max=2),
@@ -3963,9 +4076,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         for tag_ratio, prefix_ratio in combined_configs:
             scenarios.append(BenchmarkScenario(
                 name=f"Combined_Tag{int(tag_ratio*100)}_Prefix{int(prefix_ratio*100)}",
-                total_keys=10000,
+                total_keys=1000000,
                 tags_config=TagsConfig(
-                    num_keys=10000,
+                    num_keys=1000000,
                     tags_per_key=TagDistribution(avg=3, min=3, max=3),
                     tag_length=LengthConfig(avg=150, min=150, max=150),
                     sharing=TagSharingConfig(
@@ -3976,7 +4089,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                     tag_prefix=PrefixConfig(
                         enabled=True,
                         min_shared=40,
-                        max_shared=40,
+                        max_shared=140,
                         share_probability=prefix_ratio,
                         prefix_pool_size=20
                     )
@@ -3991,9 +4104,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         extreme_scenarios = [
             BenchmarkScenario(
                 name="Extreme_TinyTags",
-                total_keys=50000,
+                total_keys=500000,
                 tags_config=TagsConfig(
-                    num_keys=50000,
+                    num_keys=500000,
                     tags_per_key=TagDistribution(avg=1, min=1, max=1),
                     tag_length=LengthConfig(avg=5, min=5, max=5),
                     sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
@@ -4005,9 +4118,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             ),
             BenchmarkScenario(
                 name="Extreme_LargeTags",
-                total_keys=1000,
+                total_keys=100000,
                 tags_config=TagsConfig(
-                    num_keys=1000,
+                    num_keys=100000,
                     tags_per_key=TagDistribution(avg=1, min=1, max=1),
                     tag_length=LengthConfig(avg=5000, min=5000, max=5000),
                     sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
@@ -4019,9 +4132,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             ),
             BenchmarkScenario(
                 name="Extreme_ManyTags",
-                total_keys=5000,
+                total_keys=5000000,
                 tags_config=TagsConfig(
-                    num_keys=5000,
+                    num_keys=5000000,
                     tags_per_key=TagDistribution(avg=20, min=20, max=20),
                     tag_length=LengthConfig(avg=50, min=50, max=50),
                     sharing=TagSharingConfig(mode=TagSharingMode.UNIQUE)
@@ -4033,9 +4146,9 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             ),
             BenchmarkScenario(
                 name="Extreme_PerfectOverlap",
-                total_keys=100000,
+                total_keys=1000000,
                 tags_config=TagsConfig(
-                    num_keys=100000,
+                    num_keys=1000000,
                     tags_per_key=TagDistribution(avg=5, min=5, max=5),
                     tag_length=LengthConfig(avg=100, min=100, max=100),
                     sharing=TagSharingConfig(mode=TagSharingMode.PERFECT_OVERLAP)
@@ -4052,6 +4165,10 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         monitor.log(f"Total scenarios to test: {len(scenarios)}")
         monitor.log("")
 
+        # Create shared monitor for all scenarios' time-series data
+        shared_monitor = ProgressMonitor(self.server, monitor_csv_filename, "tag_patterns_shared")
+        shared_monitor.start()
+        
         # Run all scenarios
         all_results = []
         for i, scenario in enumerate(scenarios):
@@ -4059,29 +4176,32 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log(f"  Description: {scenario.description}")
             
             try:
-                monitor.stop()
+                # Use shared monitor for time-series data collection
                 result = self.run_benchmark_scenario(
                     monitor_csv_filename=monitor_csv_filename,
                     scenario=scenario,
-                    monitor=None,
+                    monitor=shared_monitor,  # Use shared monitor, not None
                     use_async=use_async
-                    # Each scenario gets its own monitor
                 )
-                monitor.start()
+                
                 if result:
-                    all_results.append(result)     
-                                   
-                    self.append_to_csv(csv_filename, result, monitor, write_header=(i == 0))
+                    all_results.append(result)
                     
-                    monitor.log(f"  ✓ Completed successfully")
+                    # Write to summary CSV (one line per scenario)
+                    self.append_to_csv(summary_csv_filename, result, monitor, write_header=(i == 0))
+                    
+                    monitor.log(f"  ✓ Completed successfully - Memory: {result.get('total_memory_kb', 0):.0f} KB")
                 else:
                     monitor.log(f"  ✗ Failed or skipped")
-                monitor.start()
+                    
             except Exception as e:
                 monitor.log(f"  ✗ Error: {str(e)}")
                 continue
             
             monitor.log("")
+        
+        # Stop shared monitor
+        shared_monitor.stop()
         
         # Generate summary report
         monitor.log("=" * 80)
@@ -4110,9 +4230,363 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         monitor.log("")
         monitor.log(f"Total scenarios completed: {len(all_results)}/{len(scenarios)}")
+        
+        # Generate scenario schema analysis
+        self.generate_scenario_schema_analysis(scenarios, timestamp)
+        
         monitor.stop()
         
+    def generate_scenario_schema_analysis(self, scenarios: List[BenchmarkScenario], timestamp: str):
+        """Generate detailed schema analysis for all scenarios and export to CSV"""
+        schema_csv_filename = f"tag_memory_patterns_schemas_{timestamp}.csv"
+        
+        # Define comprehensive schema fields
+        schema_fields = [
+            # Basic scenario info
+            'scenario_name', 'description', 'total_keys',
+            
+            # Vector configuration
+            'vector_dim', 'vector_algorithm', 'vector_metric', 'hnsw_m', 'hnsw_ef_construction',
+            
+            # Tag configuration basics
+            'tags_per_key_avg', 'tags_per_key_min', 'tags_per_key_max', 'tags_per_key_distribution',
+            'tag_length_avg', 'tag_length_min', 'tag_length_max', 'tag_length_distribution',
+            
+            # Tag sharing configuration
+            'tag_sharing_mode', 'tag_sharing_pool_size', 'tag_sharing_reuse_probability',
+            'tag_sharing_keys_per_group', 'tag_sharing_tags_per_group',
+            
+            # Prefix configuration
+            'prefix_enabled', 'prefix_min_shared', 'prefix_max_shared', 
+            'prefix_share_probability', 'prefix_pool_size',
+            
+            # String generation
+            'tag_string_type', 'tag_charset', 'tag_batch_size',
+            
+            # Numeric fields
+            'include_numeric', 'num_numeric_fields', 'numeric_field_names', 'numeric_field_ranges',
+            
+            # Workload configuration  
+            'workload_stages_count', 'workload_string', 'workload_details',
+            
+            # Calculated estimates
+            'estimated_unique_tags', 'estimated_total_tag_memory', 'estimated_keys_per_tag',
+            'estimated_prefix_savings', 'estimated_sharing_factor',
+            
+            # Memory predictions
+            'predicted_tag_memory_kb', 'predicted_vector_memory_kb', 
+            'predicted_numeric_memory_kb', 'predicted_total_memory_kb'
+        ]
+        
+        schema_data = []
+        
+        for scenario in scenarios:
+            # Extract all configuration details
+            schema_row = self._extract_scenario_schema(scenario)
+            schema_data.append(schema_row)
+        
+        # Write to CSV
+        with open(schema_csv_filename, 'w', newline='', encoding='utf-8') as f:
+            import csv
+            writer = csv.DictWriter(f, fieldnames=schema_fields, extrasaction='ignore')
+            writer.writeheader()
+            
+            for row in schema_data:
+                # Ensure all fields have default values
+                complete_row = {field: row.get(field, '') for field in schema_fields}
+                writer.writerow(complete_row)
+        
+        print(f"📊 Scenario schema analysis exported to: {schema_csv_filename}")
+        print(f"   Total scenarios analyzed: {len(scenarios)}")
+        
+        # Optionally generate visual summaries for first few scenarios
+        self.print_scenario_summaries(scenarios[:5])  # Show first 5 as examples
     
+    def print_scenario_summaries(self, scenarios: List[BenchmarkScenario]):
+        """Print detailed visual summaries for selected scenarios"""
+        print("\n" + "="*80)
+        print("📋 SCENARIO CONFIGURATION SUMMARIES")
+        print("="*80)
+        
+        for i, scenario in enumerate(scenarios):
+            self.print_single_scenario_summary(scenario, i+1)
+            if i < len(scenarios) - 1:
+                print("\n" + "-"*80 + "\n")
+    
+    def print_single_scenario_summary(self, scenario: BenchmarkScenario, scenario_num: int):
+        """Print a detailed summary screen for a single scenario"""
+        tags_config = scenario.tags_config
+        estimates = self._calculate_scenario_estimates(scenario)
+        
+        print(f"📊 SCENARIO #{scenario_num}: {scenario.name}")
+        print(f"📝 Description: {scenario.description}")
+        print()
+        
+        # Basic Configuration
+        print("🔧 BASIC CONFIGURATION")
+        print(f"   • Total Keys: {scenario.total_keys:,}")
+        print(f"   • Vector Dimensions: {scenario.vector_dim}")
+        print(f"   • Vector Algorithm: {scenario.vector_algorithm.name if hasattr(scenario.vector_algorithm, 'name') else scenario.vector_algorithm}")
+        print(f"   • Vector Metric: {scenario.vector_metric.name if hasattr(scenario.vector_metric, 'name') else scenario.vector_metric}")
+        if scenario.hnsw_m:
+            print(f"   • HNSW M Parameter: {scenario.hnsw_m}")
+        print()
+        
+        # Tag Configuration
+        if tags_config:
+            print("🏷️  TAG CONFIGURATION")
+            if tags_config.tags_per_key:
+                print(f"   • Tags per Key: {tags_config.tags_per_key.avg} avg (range: {tags_config.tags_per_key.min}-{tags_config.tags_per_key.max})")
+            if tags_config.tag_length:
+                print(f"   • Tag Length: {tags_config.tag_length.avg} bytes avg (range: {tags_config.tag_length.min}-{tags_config.tag_length.max})")
+            
+            # Sharing configuration
+            if tags_config.sharing:
+                sharing = tags_config.sharing
+                mode_name = sharing.mode.name if hasattr(sharing.mode, 'name') else str(sharing.mode)
+                print(f"   • Sharing Mode: {mode_name}")
+                
+                if mode_name == 'SHARED_POOL':
+                    pool_size = getattr(sharing, 'pool_size', 'N/A')
+                    reuse_prob = getattr(sharing, 'reuse_probability', 'N/A')
+                    print(f"     - Pool Size: {pool_size}")
+                    print(f"     - Reuse Probability: {reuse_prob}")
+                elif mode_name == 'GROUP_BASED':
+                    keys_per_group = getattr(sharing, 'keys_per_group', 'N/A')
+                    tags_per_group = getattr(sharing, 'tags_per_group', 'N/A')
+                    print(f"     - Keys per Group: {keys_per_group}")
+                    print(f"     - Tags per Group: {tags_per_group}")
+            
+            # Prefix configuration
+            if tags_config.tag_prefix and tags_config.tag_prefix.enabled:
+                prefix = tags_config.tag_prefix
+                print(f"   • Prefix Sharing: ENABLED")
+                print(f"     - Shared Length: {prefix.min_shared}-{prefix.max_shared} chars")
+                print(f"     - Share Probability: {prefix.share_probability}")
+                print(f"     - Prefix Pool Size: {prefix.prefix_pool_size}")
+            else:
+                print(f"   • Prefix Sharing: DISABLED")
+            print()
+        
+        # Numeric Fields
+        if scenario.include_numeric and scenario.numeric_fields:
+            print("🔢 NUMERIC FIELDS")
+            print(f"   • Number of Fields: {len(scenario.numeric_fields)}")
+            for field_name, (min_val, max_val) in scenario.numeric_fields.items():
+                print(f"   • {field_name}: {min_val} to {max_val}")
+            print()
+        
+        # Workload
+        if scenario.workload_string or scenario.workload_stages:
+            print("⚡ WORKLOAD CONFIGURATION")
+            if scenario.workload_string:
+                print(f"   • Workload String: {scenario.workload_string}")
+            if scenario.workload_stages:
+                print(f"   • Number of Stages: {len(scenario.workload_stages)}")
+            print()
+        
+        # Memory Estimates
+        print("💾 MEMORY ESTIMATES")
+        print(f"   • Estimated Unique Tags: {estimates['estimated_unique_tags']:,}")
+        print(f"   • Sharing Factor: {estimates['estimated_sharing_factor']}x")
+        print(f"   • Tag Memory: {estimates['predicted_tag_memory_kb']:.1f} KB")
+        print(f"   • Vector Memory: {estimates['predicted_vector_memory_kb']:.1f} KB")
+        if estimates['predicted_numeric_memory_kb'] > 0:
+            print(f"   • Numeric Memory: {estimates['predicted_numeric_memory_kb']:.1f} KB")
+        print(f"   • Total Predicted: {estimates['predicted_total_memory_kb']:.1f} KB ({estimates['predicted_total_memory_kb']/1024:.1f} MB)")
+        
+        if estimates['estimated_prefix_savings'] > 0:
+            print(f"   • Prefix Savings: {estimates['estimated_prefix_savings']:,} bytes")
+        print()
+        
+        # Key Statistics
+        print("📈 KEY STATISTICS")
+        if tags_config and tags_config.tags_per_key:
+            total_tag_instances = scenario.total_keys * tags_config.tags_per_key.avg
+            print(f"   • Total Tag Instances: {total_tag_instances:,.0f}")
+            print(f"   • Average Keys per Tag: {estimates['estimated_keys_per_tag']}")
+            
+            # Memory efficiency metrics
+            if estimates['estimated_unique_tags'] > 0:
+                dedup_ratio = total_tag_instances / estimates['estimated_unique_tags']
+                print(f"   • Deduplication Ratio: {dedup_ratio:.1f}:1")
+                
+                memory_efficiency = (1 - estimates['predicted_tag_memory_kb'] / (total_tag_instances * tags_config.tag_length.avg / 1024)) * 100
+                if memory_efficiency > 0:
+                    print(f"   • Memory Efficiency: {memory_efficiency:.1f}% savings")
+        print()
+    
+    def _extract_scenario_schema(self, scenario: BenchmarkScenario) -> dict:
+        """Extract detailed schema information from a BenchmarkScenario"""
+        tags_config = scenario.tags_config
+        
+        # Basic scenario info
+        schema = {
+            'scenario_name': scenario.name,
+            'description': scenario.description,
+            'total_keys': scenario.total_keys,
+        }
+        
+        # Vector configuration
+        schema.update({
+            'vector_dim': scenario.vector_dim,
+            'vector_algorithm': scenario.vector_algorithm.name if hasattr(scenario.vector_algorithm, 'name') else str(scenario.vector_algorithm),
+            'vector_metric': scenario.vector_metric.name if hasattr(scenario.vector_metric, 'name') else str(scenario.vector_metric),
+            'hnsw_m': scenario.hnsw_m or '',
+            'hnsw_ef_construction': getattr(scenario, 'hnsw_ef_construction', '') or '',
+        })
+        
+        # Tag configuration basics
+        if tags_config and tags_config.tags_per_key:
+            schema.update({
+                'tags_per_key_avg': tags_config.tags_per_key.avg,
+                'tags_per_key_min': tags_config.tags_per_key.min,
+                'tags_per_key_max': tags_config.tags_per_key.max,
+                'tags_per_key_distribution': tags_config.tags_per_key.distribution.name if hasattr(tags_config.tags_per_key.distribution, 'name') else str(tags_config.tags_per_key.distribution),
+            })
+        
+        if tags_config and tags_config.tag_length:
+            schema.update({
+                'tag_length_avg': tags_config.tag_length.avg,
+                'tag_length_min': tags_config.tag_length.min,
+                'tag_length_max': tags_config.tag_length.max,
+                'tag_length_distribution': tags_config.tag_length.distribution.name if hasattr(tags_config.tag_length.distribution, 'name') else str(tags_config.tag_length.distribution),
+            })
+        
+        # Tag sharing configuration
+        if tags_config and tags_config.sharing:
+            sharing = tags_config.sharing
+            schema.update({
+                'tag_sharing_mode': sharing.mode.name if hasattr(sharing.mode, 'name') else str(sharing.mode),
+                'tag_sharing_pool_size': getattr(sharing, 'pool_size', ''),
+                'tag_sharing_reuse_probability': getattr(sharing, 'reuse_probability', ''),
+                'tag_sharing_keys_per_group': getattr(sharing, 'keys_per_group', ''),
+                'tag_sharing_tags_per_group': getattr(sharing, 'tags_per_group', ''),
+            })
+        
+        # Prefix configuration  
+        if tags_config and tags_config.tag_prefix:
+            prefix = tags_config.tag_prefix
+            schema.update({
+                'prefix_enabled': prefix.enabled,
+                'prefix_min_shared': prefix.min_shared,
+                'prefix_max_shared': prefix.max_shared,
+                'prefix_share_probability': prefix.share_probability,
+                'prefix_pool_size': prefix.prefix_pool_size,
+            })
+        
+        # String generation
+        if tags_config:
+            schema.update({
+                'tag_string_type': tags_config.tag_string_type.name if hasattr(tags_config.tag_string_type, 'name') else str(tags_config.tag_string_type) if tags_config.tag_string_type else '',
+                'tag_charset': tags_config.tag_charset or '',
+                'tag_batch_size': tags_config.batch_size or '',
+            })
+        
+        # Numeric fields
+        schema.update({
+            'include_numeric': scenario.include_numeric,
+            'num_numeric_fields': len(scenario.numeric_fields) if scenario.numeric_fields else 0,
+            'numeric_field_names': ', '.join(scenario.numeric_fields.keys()) if scenario.numeric_fields else '',
+            'numeric_field_ranges': str(scenario.numeric_fields) if scenario.numeric_fields else '',
+        })
+        
+        # Workload configuration
+        schema.update({
+            'workload_stages_count': len(scenario.workload_stages) if scenario.workload_stages else 0,
+            'workload_string': scenario.workload_string or '',
+            'workload_details': str(scenario.workload_stages) if scenario.workload_stages else '',
+        })
+        
+        # Calculate estimates
+        estimates = self._calculate_scenario_estimates(scenario)
+        schema.update(estimates)
+        
+        return schema
+    
+    def _calculate_scenario_estimates(self, scenario: BenchmarkScenario) -> dict:
+        """Calculate detailed estimates for scenario memory usage"""
+        tags_config = scenario.tags_config
+        estimates = {}
+        
+        if not tags_config:
+            return {
+                'estimated_unique_tags': 0,
+                'estimated_total_tag_memory': 0,
+                'estimated_keys_per_tag': 0,
+                'estimated_prefix_savings': 0,
+                'estimated_sharing_factor': 1.0,
+                'predicted_tag_memory_kb': 0,
+                'predicted_vector_memory_kb': 0,
+                'predicted_numeric_memory_kb': 0,
+                'predicted_total_memory_kb': 0,
+            }
+        
+        # Basic calculations
+        total_keys = scenario.total_keys
+        avg_tags_per_key = tags_config.tags_per_key.avg if tags_config.tags_per_key else 1
+        avg_tag_length = tags_config.tag_length.avg if tags_config.tag_length else 50
+        
+        # Estimate unique tags based on sharing mode
+        sharing = tags_config.sharing
+        if not sharing or sharing.mode.name == 'UNIQUE':
+            estimated_unique_tags = total_keys * avg_tags_per_key
+            sharing_factor = 1.0
+        elif sharing.mode.name == 'PERFECT_OVERLAP':
+            estimated_unique_tags = avg_tags_per_key
+            sharing_factor = total_keys
+        elif sharing.mode.name == 'SHARED_POOL':
+            pool_size = getattr(sharing, 'pool_size', 1000)
+            estimated_unique_tags = min(pool_size, total_keys * avg_tags_per_key)
+            sharing_factor = (total_keys * avg_tags_per_key) / estimated_unique_tags if estimated_unique_tags > 0 else 1.0
+        elif sharing.mode.name == 'GROUP_BASED':
+            keys_per_group = getattr(sharing, 'keys_per_group', 100)
+            tags_per_group = getattr(sharing, 'tags_per_group', 10)
+            num_groups = (total_keys + keys_per_group - 1) // keys_per_group
+            estimated_unique_tags = num_groups * tags_per_group
+            sharing_factor = (total_keys * avg_tags_per_key) / estimated_unique_tags if estimated_unique_tags > 0 else 1.0
+        else:
+            estimated_unique_tags = total_keys * avg_tags_per_key * 0.5  # Assume 50% sharing
+            sharing_factor = 2.0
+        
+        # Estimate prefix savings
+        prefix_savings = 0
+        if tags_config.tag_prefix and tags_config.tag_prefix.enabled:
+            avg_shared_prefix = (tags_config.tag_prefix.min_shared + tags_config.tag_prefix.max_shared) / 2
+            prefix_share_prob = tags_config.tag_prefix.share_probability
+            prefix_savings = estimated_unique_tags * avg_shared_prefix * prefix_share_prob
+        
+        # Memory calculations (in bytes)
+        estimated_total_tag_memory = estimated_unique_tags * avg_tag_length - prefix_savings
+        estimated_keys_per_tag = sharing_factor
+        
+        # Predict memory usage
+        predicted_tag_memory_kb = estimated_total_tag_memory / 1024
+        
+        # Vector memory (assuming float32 = 4 bytes per dimension)
+        predicted_vector_memory_kb = (total_keys * scenario.vector_dim * 4) / 1024
+        
+        # Numeric memory (assuming 8 bytes per numeric field)
+        num_numeric_fields = len(scenario.numeric_fields) if scenario.numeric_fields else 0
+        predicted_numeric_memory_kb = (total_keys * num_numeric_fields * 8) / 1024
+        
+        # Total predicted memory (approximate)
+        predicted_total_memory_kb = predicted_tag_memory_kb + predicted_vector_memory_kb + predicted_numeric_memory_kb
+        
+        estimates.update({
+            'estimated_unique_tags': int(estimated_unique_tags),
+            'estimated_total_tag_memory': int(estimated_total_tag_memory),
+            'estimated_keys_per_tag': round(estimated_keys_per_tag, 2),
+            'estimated_prefix_savings': int(prefix_savings),
+            'estimated_sharing_factor': round(sharing_factor, 2),
+            'predicted_tag_memory_kb': round(predicted_tag_memory_kb, 1),
+            'predicted_vector_memory_kb': round(predicted_vector_memory_kb, 1),
+            'predicted_numeric_memory_kb': round(predicted_numeric_memory_kb, 1),
+            'predicted_total_memory_kb': round(predicted_total_memory_kb, 1),
+        })
+        
+        return estimates
+        
     
     def _calculate_estimated_stats(self, scenario: BenchmarkScenario) -> dict:
         """Calculate estimated statistics for a scenario"""
