@@ -39,14 +39,14 @@ import contextlib
 import io
 
 # Import our hash generator components
-from hash_generator import (
+from integration.utils.hash_generator import (
     HashKeyGenerator, HashGeneratorConfig, IndexSchema, FieldSchema,
     FieldType, VectorFieldSchema, VectorAlgorithm, VectorMetric
 )
-from tags_builder import (
+from integration.utils.tags_builder import (
     TagsConfig, TagDistribution, TagSharingConfig, TagSharingMode
 )
-from string_generator import (
+from integration.utils.string_generator import (
     LengthConfig, PrefixConfig, Distribution, StringType
 )
 
@@ -2407,7 +2407,7 @@ class StandaloneMemoryBenchmark:
                      numeric_fields: Dict[str, Tuple[float, float]] = None,
                      hnsw_m: int = 16) -> IndexSchema:
         """Create a schema with tags, vector, and optionally numeric fields"""
-        from hash_generator import create_numeric_field
+        from integration.utils.hash_generator import create_numeric_field
         
         fields = [
             FieldSchema(name="tags", type=FieldType.TAG, separator=","),
@@ -3497,8 +3497,8 @@ def main():
         benchmark.client.ping()  # Test connection
     
     # Create a simple benchmark scenario
-    from tags_builder import TagsConfig, TagDistribution, TagSharingConfig, TagSharingMode
-    from string_generator import LengthConfig
+    from integration.utils.tags_builder import TagsConfig, TagDistribution, TagSharingConfig, TagSharingMode
+    from integration.utils.string_generator import LengthConfig
     # try:
     tags_config = TagsConfig(
         num_keys=args.keys,

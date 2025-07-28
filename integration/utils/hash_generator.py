@@ -9,11 +9,11 @@ from typing import Iterator, Optional, Dict, List, Any, Union, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 
-from string_generator import (
+from integration.utils.string_generator import (
     StringGenerator, GeneratorConfig, LengthConfig, PrefixConfig,
     Distribution, StringType
 )
-from tags_builder import (
+from integration.utils.tags_builder import (
     TagsBuilder, TagsConfig, TagDistribution, TagSharingConfig,
     TagSharingMode
 )

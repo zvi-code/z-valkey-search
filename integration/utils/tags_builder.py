@@ -11,7 +11,7 @@ from enum import Enum
 import random
 from collections import defaultdict
 
-from string_generator import (
+from integration.utils.string_generator import (
     StringGenerator, GeneratorConfig, LengthConfig, PrefixConfig,
     Distribution, StringType
 )
