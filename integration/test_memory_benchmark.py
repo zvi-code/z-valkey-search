@@ -2420,7 +2420,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         log_memory_info(monitor, memory_summary, "Indexing NOT DONE:")
         sys.stdout.flush()  # Ensure immediate output
 
-    def run_benchmark_scenario(self, monitor_csv_filename: str, scenario: BenchmarkScenario, monitor: ProgressMonitor = None, use_async: bool = True) -> Dict:
+    def run_benchmark_scenario(self, monitor_csv_filename: str, scenario: BenchmarkScenario, monitor: ProgressMonitor = None) -> Dict:
         """Run a single benchmark scenario with full monitoring"""
         # Prepare index configuration for monitor
         index_config = {
@@ -2576,11 +2576,8 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log("⚡ DATA INSERTION PHASE")
             monitor.log("─" * 50)  
             monitor.log(f"📝 Generating: {scenario.total_keys:,} keys")
-            if use_async:
-                num_tasks = min(100, max(10, scenario.total_keys // config.batch_size))
-                monitor.log(f"🚀 Mode: ASYNC I/O with {num_tasks} concurrent tasks")
-            else:
-                monitor.log(f"🧵 Mode: SYNC with {num_threads} threads")
+            num_tasks = min(100, max(10, scenario.total_keys // config.batch_size))
+            monitor.log(f"🚀 Mode: ASYNC I/O with {num_tasks} concurrent tasks")
             monitor.log(f"📦 Batch size: {config.batch_size:,}")
             monitor.log("")
             
@@ -2629,57 +2626,15 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 return len(batch_data), batch_time
             
             # Choose insertion method based on use_async parameter
-            if use_async:
-                # Use async I/O for maximum performance
-                monitor.log("🚀 Starting data ingestion")
-                try:
-                    insertion_time = asyncio.run(
-                        self.run_async_insertion(scenario, generator, monitor, insertion_start_time, 
-                                                keys_processed, dist_collector, config)
-                    )
-                except Exception as e:
-                    assert False, f"Async insertion failed: {e}"
-            
-            if not use_async:
-                # Use traditional threaded approach with streaming
-                monitor.log(f"🧵 Starting SYNC data ingestion: {scenario.total_keys:,} keys using {num_threads} threads")
-                
-                with ThreadPoolExecutor(max_workers=num_threads, thread_name_prefix="ValKeyIngest") as executor:
-                    # Use a queue to limit memory usage
-                    from queue import Queue
-                    pending_futures = Queue(maxsize=num_threads * 2)  # Limit pending futures
-                    completed_batches = 0
-                    batch_id = 0
-                    
-                    # Process batches as they are generated
-                    generator_iter = iter(generator)
-                    generator_exhausted = False
-                    
-                    while not generator_exhausted or not pending_futures.empty():
-                        # Submit new batches if queue has space and generator has data
-                        while not pending_futures.full() and not generator_exhausted:
-                            try:
-                                batch = next(generator_iter)
-                                future = executor.submit(process_batch, batch, batch_id % num_threads)
-                                pending_futures.put(future)
-                                batch_id += 1
-                            except StopIteration:
-                                assert False, "Generator should not be exhausted before all keys are processed"
-                                generator_exhausted = True
-                                break
-                        
-                        # Process completed futures
-                        if not pending_futures.empty():
-                            # Get the oldest future
-                            future = pending_futures.get()
-                            try:
-                                batch_keys, batch_time = future.result(timeout=30)  # 30s timeout
-                                completed_batches += 1
-                            except Exception as e:
-                                monitor.log(f"❌ Batch failed: {e}")
-                                assert False, f"Batch processing failed: {e}"
-
-                insertion_time = time.time() - insertion_start_time
+            # Use async I/O for maximum performance
+            monitor.log("🚀 Starting data ingestion")
+            try:
+                insertion_time = asyncio.run(
+                    self.run_async_insertion(scenario, generator, monitor, insertion_start_time, 
+                                            keys_processed, dist_collector, config)
+                )
+            except Exception as e:
+                assert False, f"Async insertion failed: {e}"                        
             
             total_keys_inserted = keys_processed.get()
             memory_summary = get_memory_info_summary(client)
@@ -3447,7 +3402,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         
         return all_keys
     
-    def test_search_memory_usage(self, use_async: bool = True):
+    def test_search_memory_usage(self):
         """Benchmark search memory usage"""
         # Set up file logging
         log_file = self.setup_file_logging("search_memory")
@@ -3818,7 +3773,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
             monitor.log(f"{'='*60}\n")
             try:
                 # Pass None for monitor so each scenario creates its own with proper config
-                result = self.run_benchmark_scenario(monitor_csv_filename, scenario, monitor=None, use_async=use_async)
+                result = self.run_benchmark_scenario(monitor_csv_filename, scenario, monitor=None)
                 results.append(result)
                 # Append to CSV incrementally
                 self.append_to_csv(csv_filename, result, monitor, write_header=(i == 0))
@@ -3908,7 +3863,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
         # Stop the main monitor
         monitor.stop()
     
-    def test_tag_memory_patterns(self, use_async: bool = True):
+    def test_tag_memory_patterns(self):
         """Test tag memory patterns by systematically varying one dimension at a time"""
         # Set up file logging
         log_file = self.setup_file_logging("tag_memory_patterns")
@@ -4180,8 +4135,7 @@ class TestMemoryBenchmark(ValkeySearchTestCaseBase):
                 result = self.run_benchmark_scenario(
                     monitor_csv_filename=monitor_csv_filename,
                     scenario=scenario,
-                    monitor=shared_monitor,  # Use shared monitor, not None
-                    use_async=use_async
+                    monitor=shared_monitor  # Use shared monitor, not None
                 )
                 
                 if result:
