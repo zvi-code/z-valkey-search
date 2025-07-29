@@ -33,10 +33,6 @@ def get_index_state_info(ft_info_dict: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-
-
-
-
 def write_csv_data(filename: str, data: List[Dict[str, Any]], fieldnames: Optional[List[str]] = None):
     """Write data to CSV file with proper error handling."""
     import csv
@@ -57,54 +53,91 @@ def write_csv_data(filename: str, data: List[Dict[str, Any]], fieldnames: Option
         logging.error(f"Failed to write CSV file {filename}: {e}")
         raise
 
-
-
-
-
-
-
-
-
-
-
-
 @dataclass
 class DistributionStats:
-    """Statistics for a distribution"""
+    """Statistics for a distribution with bucketed histogram for memory efficiency"""
     count: int = 0
     min: float = float('inf')
     max: float = float('-inf')
     sum: float = 0
-    histogram: Counter = field(default_factory=Counter)
+    histogram: Dict[str, int] = field(default_factory=dict)  # bucket_range -> count
+    bucket_size: int = 1  # Default bucket size for grouping values
+    
+    def __post_init__(self):
+        # Initialize common buckets for length distributions
+        if not self.histogram:
+            self._init_length_buckets()
+    
+    def _init_length_buckets(self):
+        """Initialize buckets optimized for length distributions"""
+        # Common length ranges for tags, keys, etc.
+        buckets = ["1-5", "6-10", "11-20", "21-50", "51-100", "101-200", "201-500", "500+"]
+        for bucket in buckets:
+            self.histogram[bucket] = 0
+    
+    def _get_bucket_key(self, value: float) -> str:
+        """Get bucket key for a value"""
+        val = int(value)
+        if val <= 5: return "1-5"
+        elif val <= 10: return "6-10"
+        elif val <= 20: return "11-20"
+        elif val <= 50: return "21-50"
+        elif val <= 100: return "51-100"
+        elif val <= 200: return "101-200"
+        elif val <= 500: return "201-500"
+        else: return "500+"
     
     def add(self, value: float):
         """Add a value to the distribution"""
         self.count += 1
         self.min = min(self.min, value)
-        self.max = max(value, self.max)
+        self.max = max(self.max, value)
         self.sum += value
-        self.histogram[value] += 1
+        
+        # Add to appropriate bucket
+        bucket_key = self._get_bucket_key(value)
+        self.histogram[bucket_key] += 1
     
     @property
     def mean(self) -> float:
         return self.sum / self.count if self.count > 0 else 0
     
     def get_percentile(self, p: float) -> float:
-        """Get percentile value (0-100)"""
-        if not self.histogram:
+        """Get approximate percentile value using bucket midpoints"""
+        if not self.histogram or self.count == 0:
             return 0
         
-        sorted_values = sorted(self.histogram.items())
-        total = sum(count for _, count in sorted_values)
-        target = total * p / 100
+        # Convert buckets to sorted list with midpoint values
+        bucket_data = []
+        for bucket_range, count in self.histogram.items():
+            if count == 0:
+                continue
+            
+            # Calculate bucket midpoint
+            if bucket_range == "500+":
+                midpoint = 750  # Estimate for 500+ range
+            else:
+                parts = bucket_range.split('-')
+                if len(parts) == 2:
+                    start, end = int(parts[0]), int(parts[1])
+                    midpoint = (start + end) / 2
+                else:
+                    midpoint = int(parts[0])
+            
+            bucket_data.append((midpoint, count))
         
+        # Sort by midpoint value
+        bucket_data.sort(key=lambda x: x[0])
+        
+        target = self.count * p / 100
         cumulative = 0
-        for value, count in sorted_values:
+        
+        for midpoint, count in bucket_data:
             cumulative += count
             if cumulative >= target:
-                return value
+                return midpoint
         
-        return sorted_values[-1][0] if sorted_values else 0
+        return bucket_data[-1][0] if bucket_data else 0
 
 
 class DistributionCollector:
