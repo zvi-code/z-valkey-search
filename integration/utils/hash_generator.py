@@ -161,6 +161,9 @@ class HashKeyGenerator:
         self.config = config
         self._validate_config()
         
+        # Performance optimizations - cache frequently used values
+        self._cache_init()
+        
         if config.seed:
             np.random.seed(config.seed)
         
@@ -170,6 +173,25 @@ class HashKeyGenerator:
         self._field_generators = {}
         
         self._initialize_generators()
+    
+    def _cache_init(self):
+        """Initialize caches for performance optimization"""
+        # Pre-compute commonly used values
+        self._tag_chars = np.array(list('abcdefghijklmnopqrstuvwxyz0123456789'))
+        self._text_chars = np.array(list('abcdefghijklmnopqrstuvwxyz '))
+        
+        # Cache for RNG states to avoid expensive reseeding
+        self._rng_cache = {}
+        self._rng_cache_size = min(10000, self.config.num_keys // 100)  # Adaptive cache size
+        
+        # Pre-compute tag sharing parameters to avoid repeated calculations
+        if self.config.tags_config and self.config.tags_config.sharing:
+            sharing = self.config.tags_config.sharing
+            if sharing.mode == TagSharingMode.SHARED_POOL:
+                self._pool_size = sharing.pool_size or max(10, self.config.num_keys // 10)
+            elif sharing.mode == TagSharingMode.GROUP_BASED:
+                self._keys_per_group = sharing.keys_per_group or 100
+                self._tags_per_group = sharing.tags_per_group or 10
     
     def _validate_config(self):
         """Validate configuration consistency"""
@@ -247,15 +269,15 @@ class HashKeyGenerator:
         
         # Apply sparsity if requested
         if self.config.vector_sparsity > 0:
-            # Randomly zero out elements
+            # Vectorized sparsity application
             mask = np.random.random(dim) > self.config.vector_sparsity
-            vec = vec * mask
+            vec *= mask
         
-        # Normalize for cosine similarity
+        # Optimize normalization
         if self.config.vector_normalize or metric == VectorMetric.COSINE:
-            norm = np.linalg.norm(vec)
-            if norm > 0:
-                vec = vec / norm
+            norm_sq = np.dot(vec, vec)
+            if norm_sq > 0:
+                vec /= np.sqrt(norm_sq)  # Faster than np.linalg.norm
         
         return vec.tobytes()
     
@@ -337,6 +359,24 @@ class HashKeyGenerator:
         
         return fields
     
+    def _get_cached_rng_state(self, key_index: int) -> np.random.RandomState:
+        """Get cached RNG state or create new one, with LRU eviction"""
+        if key_index in self._rng_cache:
+            return self._rng_cache[key_index]
+        
+        # Create new RNG state
+        seed = self.config.seed + key_index if self.config.seed else key_index
+        rng = np.random.RandomState(seed)
+        
+        # Add to cache with LRU eviction
+        if len(self._rng_cache) >= self._rng_cache_size:
+            # Remove oldest entry (simple FIFO for performance)
+            oldest_key = next(iter(self._rng_cache))
+            del self._rng_cache[oldest_key]
+        
+        self._rng_cache[key_index] = rng
+        return rng
+
     def _generate_tags_for_key(self, key_index: int) -> str:
         """Generate tags for a specific key index without pre-materialization"""
         if not self.config.tags_config:
@@ -345,78 +385,90 @@ class HashKeyGenerator:
         tags_config = self.config.tags_config
         sharing = tags_config.sharing
         
-        # Determine number of tags for this key
-        np.random.seed(self.config.seed + key_index if self.config.seed else key_index)
-        num_tags = np.random.randint(
+        # Use cached RNG state instead of expensive reseeding
+        rng = self._get_cached_rng_state(key_index)
+        num_tags = rng.randint(
             tags_config.tags_per_key.min,
             tags_config.tags_per_key.max + 1
         )
         
-        tags = []
+        if num_tags == 0:
+            return ""
+        
+        # Pre-allocate tags list for better memory efficiency
+        tags = [None] * num_tags
         
         if sharing.mode == TagSharingMode.UNIQUE:
             # Generate unique tags for this key
             base_tag_index = key_index * tags_config.tags_per_key.avg
             for i in range(num_tags):
-                tag = self._generate_single_tag(base_tag_index + i)
-                tags.append(tag)
+                tags[i] = self._generate_single_tag_fast(base_tag_index + i)
         
         elif sharing.mode == TagSharingMode.SHARED_POOL:
-            # Select from a virtual pool without materializing it
-            pool_size = sharing.pool_size or max(10, self.config.num_keys // 10)
+            # Use pre-computed pool size
             for i in range(num_tags):
                 # Use consistent hashing to select tags from virtual pool
-                tag_index = (key_index * 31 + i * 17) % pool_size
-                tag = self._generate_single_tag(tag_index)
-                tags.append(tag)
+                tag_index = (key_index * 31 + i * 17) % self._pool_size
+                tags[i] = self._generate_single_tag_fast(tag_index)
         
         elif sharing.mode == TagSharingMode.PERFECT_OVERLAP:
             # All keys get the same tags
             for i in range(num_tags):
-                tag = self._generate_single_tag(i)
-                tags.append(tag)
+                tags[i] = self._generate_single_tag_fast(i)
         
         elif sharing.mode == TagSharingMode.GROUP_BASED:
-            # Keys in same group share tags
-            keys_per_group = sharing.keys_per_group or 100
-            group_id = key_index // keys_per_group
-            tags_per_group = sharing.tags_per_group or 10
+            # Use pre-computed values
+            group_id = key_index // self._keys_per_group
+            base_tag_index = group_id * self._tags_per_group
             
-            # Select tags for this group
-            base_tag_index = group_id * tags_per_group
-            tag_indices = np.random.choice(tags_per_group, size=num_tags, replace=False)
-            for idx in tag_indices:
-                tag = self._generate_single_tag(base_tag_index + idx)
-                tags.append(tag)
+            # Vectorized selection for better performance
+            if num_tags <= self._tags_per_group:
+                tag_indices = rng.choice(self._tags_per_group, size=num_tags, replace=False)
+                for i, idx in enumerate(tag_indices):
+                    tags[i] = self._generate_single_tag_fast(base_tag_index + idx)
+            else:
+                # If we need more tags than available, allow replacement
+                for i in range(num_tags):
+                    idx = rng.randint(0, self._tags_per_group)
+                    tags[i] = self._generate_single_tag_fast(base_tag_index + idx)
         
         return ','.join(tags)
     
-    def _generate_single_tag(self, tag_index: int) -> str:
-        """Generate a single tag based on its index"""
-        # Use deterministic generation based on tag index
-        np.random.seed(tag_index)
-        
+    def _generate_single_tag_fast(self, tag_index: int) -> str:
+        """Optimized version of single tag generation"""
+        # Use hash-based deterministic generation without expensive seeding
         tag_length = self.config.tags_config.tag_length
-        length = np.random.randint(tag_length.min, tag_length.max + 1)
+        
+        # Use simple hash function to determine length
+        hash_val = hash(tag_index) & 0x7FFFFFFF  # Ensure positive
+        length = tag_length.min + (hash_val % (tag_length.max - tag_length.min + 1))
         
         if self.config.tags_config.tag_string_type == StringType.ALPHANUMERIC:
-            chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
-            tag = ''.join(np.random.choice(list(chars), size=length))
+            # Use vectorized character selection for speed
+            # Create deterministic indices based on tag_index
+            indices = np.array([(tag_index * 17 + i * 31) % len(self._tag_chars) for i in range(length)], dtype=np.int32)
+            tag = ''.join(self._tag_chars[indices])
         else:
-            # Default to random bytes
+            # Default to formatted string (fastest option)
             tag = f"tag_{tag_index:08d}"
         
         return tag
     
+    def _generate_single_tag(self, tag_index: int) -> str:
+        """Generate a single tag based on its index (legacy method for compatibility)"""
+        return self._generate_single_tag_fast(tag_index)
+    
     def _get_text_length_for_key(self, key_index: int) -> int:
         """Get text length for a specific key without pre-materialization"""
-        np.random.seed(self.config.seed + key_index if self.config.seed else key_index)
-        return np.random.randint(20, 100)
+        # Use hash-based approach instead of expensive seeding
+        hash_val = hash(key_index) & 0x7FFFFFFF
+        return 20 + (hash_val % 81)  # Range 20-100
     
     def _generate_text_content(self, length: int) -> str:
         """Generate text content of specified length"""
-        chars = 'abcdefghijklmnopqrstuvwxyz '
-        return ''.join(np.random.choice(list(chars), size=length))
+        # Use pre-cached character array for faster generation
+        indices = np.random.choice(len(self._text_chars), size=length)
+        return ''.join(self._text_chars[indices])
     
     def __iter__(self) -> Iterator[List[Tuple[str, Dict[str, Any]]]]:
         """
