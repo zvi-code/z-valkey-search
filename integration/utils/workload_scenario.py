@@ -116,29 +116,18 @@ class WorkloadParser:
         if not op_type:
             return None
         
-        # Parse value
-        if op_value.endswith('%'):
-            # Percentage value
-            try:
-                percentage = float(op_value[:-1]) / 100.0
-                return WorkloadOperation(type=op_type, target_value=percentage)
-            except ValueError:
-                return None
-        elif op_value.endswith('min') or op_value.endswith('s'):
-            # Duration value
-            duration = WorkloadParser._parse_duration(op_value)
-            if duration:
-                return WorkloadOperation(type=op_type, duration_seconds=duration)
-        else:
-            # Try to parse as raw number (assume percentage)
-            try:
-                value = float(op_value)
-                # If > 1, assume it's a percentage, otherwise a fraction
-                if value > 1:
-                    value = value / 100.0
-                return WorkloadOperation(type=op_type, target_value=value)
-            except ValueError:
-                return None
+        # Delegate parsing to helper methods
+        percentage = WorkloadParser._parse_percentage_value(op_value)
+        if percentage is not None:
+            return WorkloadOperation(type=op_type, target_value=percentage)
+        
+        duration = WorkloadParser._parse_duration_value(op_value)
+        if duration is not None:
+            return WorkloadOperation(type=op_type, duration_seconds=duration)
+        
+        raw_number = WorkloadParser._parse_raw_number(op_value)
+        if raw_number is not None:
+            return WorkloadOperation(type=op_type, target_value=raw_number)
         
         return None
     
