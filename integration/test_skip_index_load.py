@@ -26,8 +26,8 @@ class TestRDBCorruptedIndex(ValkeySearchTestCaseBase):
     # 00000040 | 64 2d 6d 65 6d c2 38 30   66 00 fa 08 61 6f 66 2d  | d-mem.80f...aof-
     # 00000050 | 62 61 73 65 c0 00 fe 00   fb 01 00 10 05 64 6f 63  | base.........doc
     # 00000060 | 3a 31 40 7d 7d 00 00 00   06 00 85 74 69 74 6c 65  | :1@}}......title
-    # 00000070 | 06 8f 53 61 6d 70 6c 65   20 44 6f 63 75 6d 65 6e  | ..Sample Documen
-    # 00000080 | 74 10 8b 64 65 73 63 72   69 70 74 69 6f 6e 0c b2  | t..description..
+    # 00000070 | 06 8f 53 61 6d 70 6c 65   20 44 6f 63 75 6d 65 6e  | ..Sample Doc....
+    # 00000080 | 74 10 8b 64 65 73 63 72   69 70 74 69 6f 6e 0c b2  | ...description..
     # 00000090 | 54 68 69 73 20 69 73 20   61 20 74 65 73 74 20 64  | This is a test d
     # 000000a0 | 6f 63 75 6d 65 6e 74 20   77 69 74 68 20 61 6e 20  | ocument with an
     # 000000b0 | 65 6d 62 65 64 64 69 6e   67 20 76 65 63 74 6f 72  | embedding vector
