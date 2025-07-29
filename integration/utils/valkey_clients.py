@@ -262,10 +262,15 @@ class SilentClientPool:
     
     def close_all(self):
         """Close all clients in the pool"""
+        max_retries = 5  # Maximum number of retries for closing a client
         for client in self.clients:
-            while True:
+            retries = 0
+            while retries < max_retries:
                 try:
                     client.close()
                     break
-                except:
-                    continue
+                except Exception as e:
+                    retries += 1
+                    logging.error(f"Error closing client: {e}. Retry {retries}/{max_retries}.")
+            else:
+                logging.error(f"Failed to close client after {max_retries} retries.")
