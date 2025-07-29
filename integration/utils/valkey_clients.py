@@ -43,23 +43,15 @@ def silence_valkey_loggers():
     original_root_handlers = logging.root.handlers[:]
     null_handler = logging.NullHandler()
     
-    # Save original stdout/stderr in case client prints directly
-    original_stdout = sys.stdout
-    original_stderr = sys.stderr
-    
     # Replace root handlers with null handler
     logging.root.handlers = [null_handler]
     
-    # Redirect stdout/stderr to null
-    sys.stdout = io.StringIO()
-    sys.stderr = io.StringIO()
+    # Redirect stdout/stderr to null using context managers
+    stdout_redirect = io.StringIO()
+    stderr_redirect = io.StringIO()
     
     def restore_loggers():
         """Restore original logging configuration."""
-        # Restore stdout/stderr
-        sys.stdout = original_stdout
-        sys.stderr = original_stderr
-        
         # Restore root handlers
         logging.root.handlers = original_root_handlers
         
