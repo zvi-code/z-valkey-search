@@ -871,26 +871,10 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
       IndexSchema::Create(ctx, *index_schema_proto, mutations_thread_pool,
                           !load_attributes_on_create));
 
-  if (ABSL_PREDICT_FALSE(skip_loading_index_data)) {
-    VMSDK_LOG(NOTICE, ctx) << "Creating empty indexes for schema '"
-                           << index_schema_proto->name()
-                           << "' - will rebuild via backfill";
-    while (supplemental_iter.HasNext()) {
-      VMSDK_ASSIGN_OR_RETURN(auto supplemental_content,
-                             supplemental_iter.Next());
-      auto chunk_it = supplemental_iter.IterateChunks();
-      while (chunk_it.HasNext()) {
-        VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto chunk_result,
-                               chunk_it.Next());
-      }
-    }
-    return index_schema;
-  }
-
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto supplemental_content, supplemental_iter.Next());
-    if (supplemental_content->type() ==
+    if (ABSL_PREDICT_TRUE(!skip_loading_index_data) && supplemental_content->type() ==
         data_model::SupplementalContentType::
             SUPPLEMENTAL_CONTENT_INDEX_CONTENT) {
       auto &attribute =
@@ -900,7 +884,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
                                           supplemental_iter.IterateChunks()));
       VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
           attribute.alias(), attribute.identifier(), index));
-    } else if (supplemental_content->type() ==
+    } else if (ABSL_PREDICT_TRUE(!skip_loading_index_data) && supplemental_content->type() ==
                data_model::SupplementalContentType::
                    SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP) {
       auto &attribute =
@@ -920,9 +904,25 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           ctx, &index_schema->GetAttributeDataType(),
           supplemental_iter.IterateChunks()));
     } else {
-      VMSDK_LOG(NOTICE, ctx) << "Unknown supplemental content type: "
-                             << data_model::SupplementalContentType_Name(
-                                    supplemental_content->type());
+      if (ABSL_PREDICT_FALSE(skip_loading_index_data) && (
+          supplemental_content->type() == data_model::SupplementalContentType::
+              SUPPLEMENTAL_CONTENT_INDEX_CONTENT ||
+          supplemental_content->type() == data_model::SupplementalContentType::
+              SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP)) {
+        VMSDK_LOG(NOTICE, ctx) << "Skipping supplemental content type: "
+                               << data_model::SupplementalContentType_Name(
+                                      supplemental_content->type());
+      } else {
+        VMSDK_LOG(NOTICE, ctx) << "Unknown supplemental content type: "
+                               << data_model::SupplementalContentType_Name(
+                                      supplemental_content->type());
+      }
+      // We need to iterate over the chunks to consume them
+      [[maybe_unused]] auto chunk_it = supplemental_iter.IterateChunks();
+      while (chunk_it.HasNext()) {
+        VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto chunk_result,
+                               chunk_it.Next());
+      }
     }
   }
 
