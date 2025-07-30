@@ -43,6 +43,7 @@
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/log.h"
@@ -65,7 +66,8 @@ IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
   ValkeyModule_SelectDb(scan_ctx.get(), db_num);
   db_size = ValkeyModule_DbSize(scan_ctx.get());
   VMSDK_LOG(NOTICE, ctx) << "Starting backfill for index schema in DB "
-                         << db_num << ": " << name;
+                         << db_num << ": " << name << " (size: " << db_size
+                         << ")";
 }
 
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
@@ -862,16 +864,22 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
     ValkeyModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
     std::unique_ptr<data_model::IndexSchema> index_schema_proto,
     SupplementalContentIter &&supplemental_iter) {
-  // Attributes will be loaded from supplemental content.
+  // flag to skip loading attributes and indices
+  bool skip_loading_index_data = options::GetSkipIndexLoad().GetValue();
+  // When skipping index data, create attributes immediately (with empty
+  // indexes)
+  bool load_attributes_on_create = skip_loading_index_data;
+  // Attributes will be loaded from supplemental content. if
+  // !load_attributes_on_create
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
       IndexSchema::Create(ctx, *index_schema_proto, mutations_thread_pool,
-                          /*skip_attributes=*/true));
+                          !load_attributes_on_create));
 
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto supplemental_content, supplemental_iter.Next());
-    if (supplemental_content->type() ==
+    if (ABSL_PREDICT_TRUE(!skip_loading_index_data) && supplemental_content->type() ==
         data_model::SupplementalContentType::
             SUPPLEMENTAL_CONTENT_INDEX_CONTENT) {
       auto &attribute =
@@ -881,7 +889,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
                                           supplemental_iter.IterateChunks()));
       VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
           attribute.alias(), attribute.identifier(), index));
-    } else if (supplemental_content->type() ==
+    } else if (ABSL_PREDICT_TRUE(!skip_loading_index_data) && supplemental_content->type() ==
                data_model::SupplementalContentType::
                    SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP) {
       auto &attribute =
@@ -901,9 +909,25 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           ctx, &index_schema->GetAttributeDataType(),
           supplemental_iter.IterateChunks()));
     } else {
-      VMSDK_LOG(NOTICE, ctx) << "Unknown supplemental content type: "
-                             << data_model::SupplementalContentType_Name(
-                                    supplemental_content->type());
+      if (ABSL_PREDICT_FALSE(skip_loading_index_data) && (
+          supplemental_content->type() == data_model::SupplementalContentType::
+              SUPPLEMENTAL_CONTENT_INDEX_CONTENT ||
+          supplemental_content->type() == data_model::SupplementalContentType::
+              SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP)) {
+        VMSDK_LOG(NOTICE, ctx) << "Skipping supplemental content type: "
+                               << data_model::SupplementalContentType_Name(
+                                      supplemental_content->type());
+      } else {
+        VMSDK_LOG(NOTICE, ctx) << "Unknown supplemental content type: "
+                               << data_model::SupplementalContentType_Name(
+                                      supplemental_content->type());
+      }
+      // We need to iterate over the chunks to consume them
+      [[maybe_unused]] auto chunk_it = supplemental_iter.IterateChunks();
+      while (chunk_it.HasNext()) {
+        VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto chunk_result,
+                               chunk_it.Next());
+      }
     }
   }
 
