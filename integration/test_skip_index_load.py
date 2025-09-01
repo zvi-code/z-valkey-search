@@ -56,7 +56,7 @@ class TestRDBCorruptedIndex(ValkeySearchTestCaseBase):
 
     def _start_server(self, port, test_name, rdbfile="dump.rdb", search_module_args=""):
         server_path = os.getenv("VALKEY_SERVER_PATH")
-        testdir = f"/tmp/valkey-search-clusters/{test_name}"
+        testdir = f"/tmp/valkey-test-framework-files/{test_name}"
 
         os.makedirs(testdir, exist_ok=True)
         curdir = os.getcwd()
@@ -173,7 +173,7 @@ class TestRDBCorruptedIndex(ValkeySearchTestCaseBase):
             logging.info(f"Server failed to start as expected: {e}")
 
             # Now check the logs to verify it was actually the RDB corruption that caused the failure
-            test_dirs = [f"/tmp/valkey-search-clusters/corrupted_rdb_test_fail"]
+            test_dirs = [f"/tmp/valkey-test-framework-files/corrupted_rdb_test_fail"]
             log_found = False
 
             for test_dir in test_dirs:
@@ -278,35 +278,16 @@ class TestRDBCorruptedIndex(ValkeySearchTestCaseBase):
                     if attr_dict.get(b"identifier") == b"embedding":
                         assert attr_dict.get(b"attribute") == b"embedding"
                         assert attr_dict.get(b"type") == b"VECTOR"
-                        # Check vector parameters in the index array
-                        index_params = attr_dict.get(b"index", [])
-                        if isinstance(index_params, list):
-                            index_dict = {
-                                index_params[i]: index_params[i + 1]
-                                for i in range(0, len(index_params), 2)
-                            }
-                            assert b"dimensions" in index_dict or b"DIM" in index_dict
-                            assert (
-                                b"distance_metric" in index_dict
-                                or b"algorithm" in index_dict
-                                or b"ALGORITHM" in index_dict
-                            )
-                            # Verify it's using HNSW algorithm
-                            algorithm = index_dict.get(b"algorithm") or index_dict.get(
-                                b"ALGORITHM"
-                            )
-                            if isinstance(algorithm, list) and len(algorithm) >= 2:
-                                # Algorithm is stored as [b'name', b'HNSW', ...other params...]
-                                assert (
-                                    algorithm[0] == b"name"
-                                ), f"Expected algorithm name field, got {algorithm[0]}"
-                                assert (
-                                    algorithm[1] == b"HNSW"
-                                ), f"Expected HNSW algorithm, got {algorithm[1]}"
-                            else:
-                                assert (
-                                    algorithm == b"HNSW"
-                                ), f"Expected HNSW algorithm, got {algorithm}"
+                        assert (
+                            b"distance_metric" in attr_dict
+                            or b"algorithm" in attr_dict
+                            or b"ALGORITHM" in attr_dict
+                        )
+                        assert attr_dict.get(b"algorithm") == b"HNSW"
+                        assert b"ef_construction" in attr_dict
+                        assert b"ef_runtime" in attr_dict
+                        assert b"capacity" in attr_dict
+                        assert b"dim" in attr_dict
 
             logging.info("Index schema verified successfully")
 
