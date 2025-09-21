@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html>
+<head>
+<!--
+  SETUP INSTRUCTIONS:
+  
+  1. Change the configuration below:
+     - Set sourceRoot to your valkey-search directory
+     - Choose FILE_OPEN_METHOD:
+       * 'clipboard' - Copies file path (default, always works)
+       * 'vscode' - Opens in VS Code (requires VS Code)
+       * 'server' - Uses Node.js server (see file-opener-server.js)
+       * 'custom' - Custom protocol handler (requires setup)
+  
+  2. For VS Code method:
+     - Just set FILE_OPEN_METHOD = 'vscode'
+     - Make sure VS Code is installed
+  
+  3. For server method:
+     - Run: npm install express cors
+     - Run: VALKEY_SEARCH_SRC=/path/to/valkey-search node file-opener-server.js
+     - Set FILE_OPEN_METHOD = 'server'
+  
+  4. Click any component in the diagram to see its code references
+  5. Click file paths to open them with your chosen method
+-->
+<style>
+  body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #f5f5f5;
+  }
+  #svg-container {
+    width: 100%;
+    height: 100vh;
+    overflow: auto;
+  }
+  .code-tooltip {
+    position: absolute;
+    background: #333;
+    color: #fff;
+    padding: 10px;
+    border-radius: 5px;
+    font-size: 12px;
+    font-family: monospace;
+    display: none;
+    max-width: 500px;
+    max-height: 400px;
+    overflow-y: auto;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+    z-index: 1000;
+  }
+  .code-tooltip h4 {
+    margin: 0 0 10px 0;
+    color: #4CAF50;
+  }
+  .code-tooltip .file-path {
+    color: #2196F3;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+  .code-tooltip .file-path:hover {
+    color: #64B5F6;
+  }
+  .code-snippet {
+    background: #222;
+    padding: 8px;
+    margin: 5px 0;
+    border-radius: 3px;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .hoverable {
+    cursor: pointer;
+  }
+  .hoverable:hover rect {
+    stroke-width: 3;
+    filter: drop-shadow(2px 2px 4px rgba(0,0,0,0.3));
+  }
+</style>
+</head>
+<body>
+<div id="svg-container">
+<svg viewBox="0 0 2000 2400" xmlns="http://www.w3.org/2000/svg">
+  <!-- Title -->
+  <text x="1000" y="40" text-anchor="middle" font-size="26" font-weight="bold">Interactive Valkey-Search Memory Layout (Click for Code References)</text>
+  
+  <!-- Global/Shared Memory Section -->
+  <g id="global-memory">
+    <rect x="50" y="80" width="1900" height="300" fill="#f5f5f5" stroke="#333" stroke-width="2"/>
+    <text x="1000" y="110" text-anchor="middle" font-size="20" font-weight="bold">Global/Shared Memory Components</text>
+    
+    <!-- StringInternStore -->
+    <g class="hoverable" data-component="StringInternStore" data-file="src/utils/string_interning.h">
+      <rect x="80" y="140" width="400" height="220" fill="#e3f2fd" stroke="#1976d2" stroke-width="2"/>
+      <text x="280" y="170" text-anchor="middle" font-size="16" font-weight="bold">StringInternStore (Singleton)</text>
+      <rect x="100" y="190" width="360" height="60" fill="#fff" stroke="#1976d2" stroke-width="1"/>
+      <text x="280" y="210" text-anchor="middle" font-size="11" font-weight="bold">Interned Keys</text>
+      <text x="280" y="225" text-anchor="middle" font-size="10">"user:123", "product:456", "doc:789"</text>
+      <text x="280" y="240" text-anchor="middle" font-size="10">Deduplication via refcounting</text>
+      
+      <rect x="100" y="260" width="360" height="80" fill="#bbdefb" stroke="#1976d2" stroke-width="1"/>
+      <text x="280" y="280" text-anchor="middle" font-size="11" font-weight="bold">Interned Data</text>
+      <text x="280" y="295" text-anchor="middle" font-size="10">• Vectors: [0.1, 0.2, ...] (arena allocated)</text>
+      <text x="280" y="310" text-anchor="middle" font-size="10">• Tags: "electronics,phones,apple"</text>
+      <text x="280" y="325" text-anchor="middle" font-size="10">• Attribute identifiers: "embedding", "price"</text>
+    </g>
+    
+    <!-- VectorExternalizer -->
+    <g class="hoverable" data-component="VectorExternalizer" data-file="src/vector_externalizer.h">
+      <rect x="520" y="140" width="420" height="220" fill="#e8f5e9" stroke="#388e3c" stroke-width="2"/>
+      <text x="730" y="170" text-anchor="middle" font-size="16" font-weight="bold">VectorExternalizer (Singleton)</text>
+      <rect x="540" y="190" width="380" height="60" fill="#fff" stroke="#388e3c" stroke-width="1"/>
+      <text x="730" y="210" text-anchor="middle" font-size="11" font-weight="bold">shared_vectors_ / deferred_vectors_</text>
+      <text x="730" y="225" text-anchor="middle" font-size="10">Map&lt;(key,attr) → VectorEntry&gt;</text>
+      <text x="730" y="240" text-anchor="middle" font-size="10">Registers with Valkey hash externalization</text>
+      
+      <rect x="540" y="260" width="380" height="80" fill="#c8e6c9" stroke="#388e3c" stroke-width="1"/>
+      <text x="730" y="280" text-anchor="middle" font-size="11" font-weight="bold">LRU Cache (100 entries)</text>
+      <text x="730" y="295" text-anchor="middle" font-size="10">Caches denormalized vectors</text>
+      <text x="730" y="310" text-anchor="middle" font-size="10">LRUCacheEntry → normalized_vector</text>
+      <text x="730" y="325" text-anchor="middle" font-size="10">Prevents repeated vec × magnitude</text>
+    </g>
+    
+    <!-- Memory Allocators -->
+    <g class="hoverable" data-component="MemoryAllocators" data-file="src/utils/allocator.h">
+      <rect x="980" y="140" width="440" height="220" fill="#fff3e0" stroke="#f57c00" stroke-width="2"/>
+      <text x="1200" y="170" text-anchor="middle" font-size="16" font-weight="bold">Memory Allocators</text>
+      
+      <rect x="1000" y="190" width="190" height="150" fill="#fff" stroke="#f57c00" stroke-width="1"/>
+      <text x="1095" y="210" text-anchor="middle" font-size="11" font-weight="bold">FixedSizeAllocator</text>
+      <text x="1095" y="225" text-anchor="middle" font-size="9">For vector storage</text>
+      <text x="1095" y="240" text-anchor="middle" font-size="9">• Chunks of fixed size</text>
+      <text x="1095" y="255" text-anchor="middle" font-size="9">• Free list per chunk</text>
+      <text x="1095" y="270" text-anchor="middle" font-size="9">• CPU cache friendly</text>
+      <text x="1095" y="285" text-anchor="middle" font-size="9">• Prioritizes hot chunks</text>
+      <text x="1095" y="305" text-anchor="middle" font-size="10" font-weight="bold">AllocatorChunk</text>
+      <text x="1095" y="320" text-anchor="middle" font-size="9">data[], free_list</text>
+      <text x="1095" y="335" text-anchor="middle" font-size="9">entries_in_chunk</text>
+      
+      <rect x="1210" y="190" width="190" height="150" fill="#fff" stroke="#f57c00" stroke-width="1"/>
+      <text x="1305" y="210" text-anchor="middle" font-size="11" font-weight="bold">Arena Allocators</text>
+      <text x="1305" y="225" text-anchor="middle" font-size="9">For interned strings</text>
+      <text x="1305" y="240" text-anchor="middle" font-size="9">• Bulk allocation</text>
+      <text x="1305" y="255" text-anchor="middle" font-size="9">• No individual free</text>
+      <text x="1305" y="270" text-anchor="middle" font-size="9">• Minimal overhead</text>
+      <text x="1305" y="290" text-anchor="middle" font-size="10" font-weight="bold">Usage:</text>
+      <text x="1305" y="305" text-anchor="middle" font-size="9">• vector_allocator_</text>
+      <text x="1305" y="320" text-anchor="middle" font-size="9">• String interning</text>
+      <text x="1305" y="335" text-anchor="middle" font-size="9">• Tag storage</text>
+    </g>
+    
+    <!-- IndexSchema -->
+    <g class="hoverable" data-component="IndexSchema" data-file="src/index_schema.h">
+      <rect x="1460" y="140" width="460" height="220" fill="#f3e5f5" stroke="#7b1fa2" stroke-width="2"/>
+      <text x="1690" y="170" text-anchor="middle" font-size="16" font-weight="bold">IndexSchema</text>
+      <rect x="1480" y="190" width="420" height="60" fill="#fff" stroke="#7b1fa2" stroke-width="1"/>
+      <text x="1690" y="210" text-anchor="middle" font-size="11" font-weight="bold">Index Registry</text>
+      <text x="1690" y="225" text-anchor="middle" font-size="10">Map&lt;alias → shared_ptr&lt;IndexBase&gt;&gt;</text>
+      <text x="1690" y="240" text-anchor="middle" font-size="10">Coordinates all index types</text>
+      
+      <rect x="1480" y="260" width="200" height="80" fill="#e1bee7" stroke="#7b1fa2" stroke-width="1"/>
+      <text x="1580" y="280" text-anchor="middle" font-size="11" font-weight="bold">Attribute Mapping</text>
+      <text x="1580" y="295" text-anchor="middle" font-size="10">alias → identifier</text>
+      <text x="1580" y="310" text-anchor="middle" font-size="10">"vec" → "embedding"</text>
+      <text x="1580" y="325" text-anchor="middle" font-size="10">"cost" → "price"</text>
+      
+      <rect x="1700" y="260" width="200" height="80" fill="#e1bee7" stroke="#7b1fa2" stroke-width="1"/>
+      <text x="1800" y="280" text-anchor="middle" font-size="11" font-weight="bold">Mutation Tracking</text>
+      <text x="1800" y="295" text-anchor="middle" font-size="10">tracked_mutated_records_</text>
+      <text x="1800" y="310" text-anchor="middle" font-size="10">Batch processing</text>
+      <text x="1800" y="325" text-anchor="middle" font-size="10">Cross-index updates</text>
+    </g>
+  </g>
+  
+  <!-- Vector Indexes Section -->
+  <g id="vector-indexes">
+    <rect x="50" y="420" width="920" height="880" fill="#e8eaf6" stroke="#3f51b5" stroke-width="2"/>
+    <text x="510" y="450" text-anchor="middle" font-size="20" font-weight="bold">Vector Indexes</text>
+    
+    <!-- VectorBase -->
+    <g class="hoverable" data-component="VectorBase" data-file="src/indexes/vector_base.h">
+      <rect x="80" y="480" width="860" height="180" fill="#c5cae9" stroke="#3f51b5" stroke-width="2"/>
+      <text x="510" y="510" text-anchor="middle" font-size="16" font-weight="bold">VectorBase (Abstract)</text>
+      
+      <rect x="100" y="530" width="260" height="110" fill="#fff" stroke="#3f51b5" stroke-width="1"/>
+      <text x="230" y="550" text-anchor="middle" font-size="11" font-weight="bold">tracked_metadata_by_key_</text>
+      <text x="230" y="565" text-anchor="middle" font-size="9">InternedStringMap&lt;Metadata&gt;</text>
+      <text x="230" y="580" text-anchor="middle" font-size="9">key → {internal_id, magnitude}</text>
+      <text x="230" y="595" text-anchor="middle" font-size="9">"user:123" → {id:1, mag:1.732}</text>
+      <text x="230" y="610" text-anchor="middle" font-size="9">Protected by RW mutex</text>
+      <text x="230" y="630" text-anchor="middle" font-size="10" font-weight="bold">inc_id_ counter</text>
+      
+      <rect x="380" y="530" width="260" height="110" fill="#fff" stroke="#3f51b5" stroke-width="1"/>
+      <text x="510" y="550" text-anchor="middle" font-size="11" font-weight="bold">key_by_internal_id_</text>
+      <text x="510" y="565" text-anchor="middle" font-size="9">map&lt;uint64_t, InternedStringPtr&gt;</text>
+      <text x="510" y="580" text-anchor="middle" font-size="9">1 → ptr("user:123")</text>
+      <text x="510" y="595" text-anchor="middle" font-size="9">2 → ptr("user:456")</text>
+      <text x="510" y="610" text-anchor="middle" font-size="9">For reverse lookups</text>
+      <text x="510" y="630" text-anchor="middle" font-size="9">Lock-free during search</text>
+      
+      <rect x="660" y="530" width="260" height="110" fill="#fff" stroke="#3f51b5" stroke-width="1"/>
+      <text x="790" y="550" text-anchor="middle" font-size="11" font-weight="bold">vector_allocator_</text>
+      <text x="790" y="565" text-anchor="middle" font-size="9">unique_ptr&lt;FixedSizeAllocator&gt;</text>
+      <text x="790" y="580" text-anchor="middle" font-size="9">Size = dimensions × sizeof(T)</text>
+      <text x="790" y="595" text-anchor="middle" font-size="9">Allocates vector storage</text>
+      <text x="790" y="615" text-anchor="middle" font-size="10" font-weight="bold">normalize_, distance_metric_</text>
+      <text x="790" y="630" text-anchor="middle" font-size="9">dimensions_</text>
+    </g>
+    
+    <!-- HNSW -->
+    <g class="hoverable" data-component="VectorHNSW" data-file="src/indexes/vector_hnsw.h">
+      <rect x="80" y="690" width="420" height="580" fill="#e1f5fe" stroke="#0277bd" stroke-width="2"/>
+      <text x="290" y="720" text-anchor="middle" font-size="16" font-weight="bold">VectorHNSW&lt;T&gt; : VectorBase</text>
+      
+      <rect x="100" y="740" width="380" height="140" fill="#fff" stroke="#0277bd" stroke-width="1"/>
+      <text x="290" y="760" text-anchor="middle" font-size="11" font-weight="bold">HierarchicalNSW algo_</text>
+      <text x="290" y="780" text-anchor="middle" font-size="10" font-weight="bold">Graph Structure:</text>
+      <text x="290" y="795" text-anchor="middle" font-size="9">• Multiple layers (hierarchical)</text>
+      <text x="290" y="810" text-anchor="middle" font-size="9">• label_lookup_: internal_id → tableint</text>
+      <text x="290" y="825" text-anchor="middle" font-size="9">• linkLists_: graph connections</text>
+      <text x="290" y="840" text-anchor="middle" font-size="9">• data_level0_memory_: vector storage</text>
+      <text x="290" y="855" text-anchor="middle" font-size="9">• element_levels_: node layer assignments</text>
+      <text x="290" y="870" text-anchor="middle" font-size="9">• Soft delete only (markDeleted)</text>
+      
+      <rect x="100" y="900" width="180" height="100" fill="#b3e5fc" stroke="#0277bd" stroke-width="1"/>
+      <text x="190" y="920" text-anchor="middle" font-size="11" font-weight="bold">Parameters</text>
+      <text x="190" y="940" text-anchor="middle" font-size="9">M: 16 (connections)</text>
+      <text x="190" y="955" text-anchor="middle" font-size="9">ef_construction: 200</text>
+      <text x="190" y="970" text-anchor="middle" font-size="9">ef_runtime: 10</text>
+      <text x="190" y="985" text-anchor="middle" font-size="9">max_elements_</text>
+      
+      <rect x="300" y="900" width="180" height="100" fill="#b3e5fc" stroke="#0277bd" stroke-width="1"/>
+      <text x="390" y="920" text-anchor="middle" font-size="11" font-weight="bold">tracked_vectors_</text>
+      <text x="390" y="940" text-anchor="middle" font-size="9">vector&lt;InternedStringPtr&gt;</text>
+      <text x="390" y="955" text-anchor="middle" font-size="9">Never removed</text>
+      <text x="390" y="970" text-anchor="middle" font-size="9">Matches HNSW</text>
+      <text x="390" y="985" text-anchor="middle" font-size="9">soft delete behavior</text>
+      
+      <rect x="100" y="1020" width="380" height="230" fill="#e1f5fe" stroke="#0277bd" stroke-width="1"/>
+      <text x="290" y="1045" text-anchor="middle" font-size="11" font-weight="bold">Memory Layout per Node</text>
+      
+      <rect x="120" y="1060" width="340" height="60" fill="#fff" stroke="#0277bd" stroke-width="1"/>
+      <text x="290" y="1080" text-anchor="middle" font-size="10" font-weight="bold">Level 0 (all nodes)</text>
+      <text x="290" y="1095" text-anchor="middle" font-size="9">Vector data: dims × sizeof(T)</text>
+      <text x="290" y="1110" text-anchor="middle" font-size="9">Links: M × 2 × sizeof(tableint)</text>
+      
+      <rect x="120" y="1130" width="340" height="50" fill="#fff" stroke="#0277bd" stroke-width="1"/>
+      <text x="290" y="1150" text-anchor="middle" font-size="10" font-weight="bold">Higher levels (subset of nodes)</text>
+      <text x="290" y="1165" text-anchor="middle" font-size="9">Links: M × sizeof(tableint) per level</text>
+      
+      <text x="290" y="1200" text-anchor="middle" font-size="10" font-weight="bold">Example (1M vectors, 384 dims):</text>
+      <text x="290" y="1215" text-anchor="middle" font-size="9">Vectors: 1M × 384 × 4B = 1.5GB</text>
+      <text x="290" y="1230" text-anchor="middle" font-size="9">Graph: ~1M × 64 × 8B = 512MB</text>
+      <text x="290" y="1245" text-anchor="middle" font-size="9">Total: ~2GB + overhead</text>
+    </g>
+    
+    <!-- FLAT -->
+    <g class="hoverable" data-component="VectorFlat" data-file="src/indexes/vector_flat.h">
+      <rect x="520" y="690" width="420" height="580" fill="#e0f2f1" stroke="#00796b" stroke-width="2"/>
+      <text x="730" y="720" text-anchor="middle" font-size="16" font-weight="bold">VectorFlat&lt;T&gt; : VectorBase</text>
+      
+      <rect x="540" y="740" width="380" height="140" fill="#fff" stroke="#00796b" stroke-width="1"/>
+      <text x="730" y="760" text-anchor="middle" font-size="11" font-weight="bold">BruteforceSearch algo_</text>
+      <text x="730" y="780" text-anchor="middle" font-size="10" font-weight="bold">Linear Storage:</text>
+      <text x="730" y="795" text-anchor="middle" font-size="9">• data_: vector of char* pointers</text>
+      <text x="730" y="810" text-anchor="middle" font-size="9">• dict_external_to_internal:</text>
+      <text x="730" y="825" text-anchor="middle" font-size="9">  labeltype → size_t (array index)</text>
+      <text x="730" y="840" text-anchor="middle" font-size="9">• Contiguous array storage</text>
+      <text x="730" y="855" text-anchor="middle" font-size="9">• O(N) search complexity</text>
+      <text x="730" y="870" text-anchor="middle" font-size="9">• Exact results (no approximation)</text>
+      
+      <rect x="540" y="900" width="180" height="100" fill="#b2dfdb" stroke="#00796b" stroke-width="1"/>
+      <text x="630" y="920" text-anchor="middle" font-size="11" font-weight="bold">Parameters</text>
+      <text x="630" y="940" text-anchor="middle" font-size="9">block_size_: 1000</text>
+      <text x="630" y="955" text-anchor="middle" font-size="9">initial_cap: 1000</text>
+      <text x="630" y="970" text-anchor="middle" font-size="9">cur_element_count_</text>
+      <text x="630" y="985" text-anchor="middle" font-size="9">Dynamic resize</text>
+      
+      <rect x="740" y="900" width="180" height="100" fill="#b2dfdb" stroke="#00796b" stroke-width="1"/>
+      <text x="830" y="920" text-anchor="middle" font-size="11" font-weight="bold">tracked_vectors_</text>
+      <text x="830" y="940" text-anchor="middle" font-size="9">flat_hash_map&lt;</text>
+      <text x="830" y="955" text-anchor="middle" font-size="9">id → InternedStringPtr&gt;</text>
+      <text x="830" y="970" text-anchor="middle" font-size="9">Direct mapping</text>
+      <text x="830" y="985" text-anchor="middle" font-size="9">Physical removal</text>
+      
+      <rect x="540" y="1020" width="380" height="230" fill="#e0f2f1" stroke="#00796b" stroke-width="1"/>
+      <text x="730" y="1045" text-anchor="middle" font-size="11" font-weight="bold">Memory Layout</text>
+      
+      <rect x="560" y="1060" width="340" height="80" fill="#fff" stroke="#00796b" stroke-width="1"/>
+      <text x="730" y="1080" text-anchor="middle" font-size="10" font-weight="bold">Vector Storage</text>
+      <text x="730" y="1095" text-anchor="middle" font-size="9">Array of pointers: N × 8B</text>
+      <text x="730" y="1110" text-anchor="middle" font-size="9">Vector data: N × dims × sizeof(T)</text>
+      <text x="730" y="1125" text-anchor="middle" font-size="9">Uses FixedSizeAllocator</text>
+      
+      <rect x="560" y="1150" width="340" height="60" fill="#fff" stroke="#00796b" stroke-width="1"/>
+      <text x="730" y="1170" text-anchor="middle" font-size="10" font-weight="bold">Resize Strategy</text>
+      <text x="730" y="1185" text-anchor="middle" font-size="9">When full: capacity += block_size</text>
+      <text x="730" y="1200" text-anchor="middle" font-size="9">Realloc pointer array only</text>
+      
+      <text x="730" y="1225" text-anchor="middle" font-size="10" font-weight="bold">Example (10K vectors, 384 dims):</text>
+      <text x="730" y="1240" text-anchor="middle" font-size="9">Total: 10K × 384 × 4B = 15MB</text>
+    </g>
+  </g>
+  
+  <!-- Non-Vector Indexes Section -->
+  <g id="non-vector-indexes">
+    <rect x="1030" y="420" width="920" height="880" fill="#fff8e1" stroke="#ff6f00" stroke-width="2"/>
+    <text x="1490" y="450" text-anchor="middle" font-size="20" font-weight="bold">Non-Vector Indexes</text>
+    
+    <!-- Numeric Index -->
+    <g class="hoverable" data-component="Numeric" data-file="src/indexes/numeric.h">
+      <rect x="1060" y="480" width="420" height="380" fill="#ffe0b2" stroke="#ef6c00" stroke-width="2"/>
+      <text x="1270" y="510" text-anchor="middle" font-size="16" font-weight="bold">Numeric : IndexBase</text>
+      
+      <rect x="1080" y="530" width="380" height="120" fill="#fff" stroke="#ef6c00" stroke-width="1"/>
+      <text x="1270" y="550" text-anchor="middle" font-size="11" font-weight="bold">InvertedIndex inverted_index_</text>
+      <text x="1270" y="570" text-anchor="middle" font-size="10" font-weight="bold">btree_map&lt;double, SetType&gt;</text>
+      <text x="1270" y="585" text-anchor="middle" font-size="9">1.5 → {"doc1", "doc5"}</text>
+      <text x="1270" y="600" text-anchor="middle" font-size="9">2.0 → {"doc2", "doc3", "doc4"}</text>
+      <text x="1270" y="615" text-anchor="middle" font-size="9">Sorted by value</text>
+      <text x="1270" y="630" text-anchor="middle" font-size="9">SetType = flat_hash_set&lt;InternedStringPtr&gt;</text>
+      <text x="1270" y="645" text-anchor="middle" font-size="9">O(log n) range queries</text>
+      
+      <rect x="1080" y="670" width="380" height="100" fill="#fff" stroke="#ef6c00" stroke-width="1"/>
+      <text x="1270" y="690" text-anchor="middle" font-size="11" font-weight="bold">SegmentTree segment_tree_</text>
+      <text x="1270" y="705" text-anchor="middle" font-size="9">For efficient range counting</text>
+      <text x="1270" y="720" text-anchor="middle" font-size="9">Binary tree structure</text>
+      <text x="1270" y="735" text-anchor="middle" font-size="9">~80 bytes per entry overhead</text>
+      <text x="1270" y="750" text-anchor="middle" font-size="9">40B/node × 2 nodes/entry</text>
+      <text x="1270" y="765" text-anchor="middle" font-size="9">O(log n) count queries</text>
+      
+      <rect x="1080" y="790" width="180" height="50" fill="#ffccbc" stroke="#ef6c00" stroke-width="1"/>
+      <text x="1170" y="810" text-anchor="middle" font-size="11" font-weight="bold">tracked_keys_</text>
+      <text x="1170" y="825" text-anchor="middle" font-size="9">key → value</text>
+      
+      <rect x="1280" y="790" width="180" height="50" fill="#ffccbc" stroke="#ef6c00" stroke-width="1"/>
+      <text x="1370" y="810" text-anchor="middle" font-size="11" font-weight="bold">Operations</text>
+      <text x="1370" y="825" text-anchor="middle" font-size="9">Range search, Count</text>
+    </g>
+    
+    <!-- Tag Index -->
+    <g class="hoverable" data-component="Tag" data-file="src/indexes/tag.h">
+      <rect x="1510" y="480" width="420" height="380" fill="#fce4ec" stroke="#c2185b" stroke-width="2"/>
+      <text x="1720" y="510" text-anchor="middle" font-size="16" font-weight="bold">Tag : IndexBase</text>
+      
+      <rect x="1530" y="530" width="380" height="140" fill="#fff" stroke="#c2185b" stroke-width="1"/>
+      <text x="1720" y="550" text-anchor="middle" font-size="11" font-weight="bold">PatriciaTreeIndex tree_</text>
+      <text x="1720" y="570" text-anchor="middle" font-size="10" font-weight="bold">Prefix Tree Structure:</text>
+      <text x="1720" y="585" text-anchor="middle" font-size="9">• Compressed trie for tags</text>
+      <text x="1720" y="600" text-anchor="middle" font-size="9">• Node → set&lt;InternedStringPtr&gt;</text>
+      <text x="1720" y="615" text-anchor="middle" font-size="9">"electronics" → {"doc1", "doc3"}</text>
+      <text x="1720" y="630" text-anchor="middle" font-size="9">"electron*" matches above</text>
+      <text x="1720" y="645" text-anchor="middle" font-size="9">• O(m) lookup (m = tag length)</text>
+      <text x="1720" y="660" text-anchor="middle" font-size="9">• Efficient prefix search</text>
+      
+      <rect x="1530" y="690" width="180" height="80" fill="#fff" stroke="#c2185b" stroke-width="1"/>
+      <text x="1620" y="710" text-anchor="middle" font-size="11" font-weight="bold">tracked_tags_by_keys_</text>
+      <text x="1620" y="725" text-anchor="middle" font-size="9">key → TagInfo</text>
+      <text x="1620" y="740" text-anchor="middle" font-size="9">raw_tag_string</text>
+      <text x="1620" y="755" text-anchor="middle" font-size="9">parsed tags set</text>
+      
+      <rect x="1730" y="690" width="180" height="80" fill="#fff" stroke="#c2185b" stroke-width="1"/>
+      <text x="1820" y="710" text-anchor="middle" font-size="11" font-weight="bold">Parameters</text>
+      <text x="1820" y="725" text-anchor="middle" font-size="9">separator_: ','</text>
+      <text x="1820" y="740" text-anchor="middle" font-size="9">case_sensitive_: bool</text>
+      <text x="1820" y="755" text-anchor="middle" font-size="9">min_prefix_len: 2</text>
+      
+      <rect x="1530" y="790" width="380" height="50" fill="#f8bbd0" stroke="#c2185b" stroke-width="1"/>
+      <text x="1720" y="810" text-anchor="middle" font-size="11" font-weight="bold">untracked_keys_</text>
+      <text x="1720" y="825" text-anchor="middle" font-size="9">Keys without tags (empty tag string)</text>
+    </g>
+  </g>
+</svg>
+</div>
+
+<!-- Tooltip div -->
+<div id="code-tooltip" class="code-tooltip"></div>
+
+<script>
+// Code snippets for each component
+const codeSnippets = {
+  "StringInternStore": {
+    files: ["src/utils/string_interning.h", "src/utils/string_interning.cc"],
+    description: "Singleton for string deduplication using weak_ptr reference counting",
+    snippet: `// Key methods:
+static InternedStringPtr Intern(string_view str, Allocator* allocator = nullptr);
+static InternedStringPtr Intern(const string& str);
+
+// Implementation:
+class StringInternStore {
+  static absl::flat_hash_map<string, weak_ptr<InternedString>> interned_strings_;
+  static shared_ptr<InternedString> CreateInternedString(string_view str, Allocator* allocator);
+};`
+  },
+  "VectorExternalizer": {
+    files: ["src/vector_externalizer.h", "src/vector_externalizer.cc"],
+    description: "Manages vector sharing across indexes with deferred updates and LRU caching",
+    snippet: `// Two-phase update mechanism:
+deferred_shared_vectors_  // Temporary during updates
+shared_vectors_          // Registered with Valkey
+
+// Key method:
+void ProcessEngineUpdateQueue() {
+  // Move from deferred to shared
+  // Register with ValkeyModule_HashExternalize
+}`
+  },
+  "MemoryAllocators": {
+    files: ["src/utils/allocator.h", "src/utils/allocator.cc"],
+    description: "Custom allocators for efficient memory management",
+    snippet: `FixedSizeAllocator: Chunk-based allocation for vectors
+- Fixed size chunks
+- Free list per chunk
+- Cache-friendly access
+
+Arena Allocator: Bulk allocation for strings
+- No individual free
+- Minimal overhead`
+  },
+  "IndexSchema": {
+    files: ["src/index_schema.h", "src/index_schema.cc"],
+    description: "Coordinates all indexes and tracks mutations",
+    snippet: `// Mutation tracking:
+tracked_mutated_records_
+ConsumeMutatedKeys()
+ProcessSingleKeyUpdate()
+
+// Index registry:
+indexes_by_alias_
+attribute_mapping_`
+  },
+  "VectorBase": {
+    files: ["src/indexes/vector_base.h", "src/indexes/vector_base.cc"],
+    description: "Abstract base class for vector indexes",
+    snippet: `// Key data structures:
+tracked_metadata_by_key_  // key -> {internal_id, magnitude}
+key_by_internal_id_      // reverse lookup
+inc_id_                  // auto-increment counter
+vector_allocator_        // FixedSizeAllocator`
+  },
+  "VectorHNSW": {
+    files: ["src/indexes/vector_hnsw.h", "src/indexes/vector_hnsw.cc", "third_party/hnswlib/hnswalg.h"],
+    description: "Hierarchical Navigable Small World graph implementation",
+    snippet: `// HNSW specific:
+M = 16                   // connections per node
+ef_construction = 200    // build quality
+ef_runtime = 10         // search quality
+allow_replace_deleted_ = false  // soft delete only`
+  },
+  "VectorFlat": {
+    files: ["src/indexes/vector_flat.h", "src/indexes/vector_flat.cc"],
+    description: "Brute force vector search with exact results",
+    snippet: `// Linear storage:
+data_: vector<char*>*
+dict_external_to_internal
+block_size_ = 1000      // resize increment`
+  },
+  "Numeric": {
+    files: ["src/indexes/numeric.h", "src/indexes/numeric.cc"],
+    description: "Range queries on numeric values",
+    snippet: `// Dual structure:
+btree_map<double, SetType>  // sorted values
+SegmentTree                 // range counting
+~120B per entry overhead`
+  },
+  "Tag": {
+    files: ["src/indexes/tag.h", "src/indexes/tag.cc"],
+    description: "Tag indexing with prefix search support",
+    snippet: `// Patricia tree for prefix matching:
+tree_.PrefixMatcher(prefix)
+tree_.ExactMatcher(tag)
+min_prefix_length = 2`
+  }
+};
+
+// Configuration - CHANGE THESE TO MATCH YOUR SETUP
+const sourceRoot = '/Volumes/workplace/z-valkey-search';  // Change this to your actual path
+const FILE_OPEN_METHOD = 'vscode';  // Options: 'vscode', 'clipboard', 'server', 'custom'
+const SERVER_URL = 'http://localhost:3000';  // If using server method
+
+// Add click handlers
+document.querySelectorAll('.hoverable').forEach(element => {
+  element.addEventListener('click', function(e) {
+    const component = this.getAttribute('data-component');
+    const file = this.getAttribute('data-file');
+    const rect = this.getBoundingClientRect();
+    const tooltip = document.getElementById('code-tooltip');
+    
+    if (codeSnippets[component]) {
+      const data = codeSnippets[component];
+      let html = `<h4>${component}</h4>`;
+      html += `<p>${data.description}</p>`;
+      html += '<div>Files: ';
+      data.files.forEach((f, i) => {
+        if (i > 0) html += ', ';
+        html += `<span class="file-path" onclick="openFile('${f}')">${f}</span>`;
+      });
+      html += '</div>';
+      html += `<div class="code-snippet">${data.snippet}</div>`;
+      
+      tooltip.innerHTML = html;
+      tooltip.style.display = 'block';
+      tooltip.style.left = rect.left + 'px';
+      tooltip.style.top = (rect.bottom + 10) + 'px';
+      
+      // Adjust if tooltip goes off screen
+      const tooltipRect = tooltip.getBoundingClientRect();
+      if (tooltipRect.right > window.innerWidth) {
+        tooltip.style.left = (window.innerWidth - tooltipRect.width - 10) + 'px';
+      }
+      if (tooltipRect.bottom > window.innerHeight) {
+        tooltip.style.top = (rect.top - tooltipRect.height - 10) + 'px';
+      }
+    }
+    
+    e.stopPropagation();
+  });
+});
+
+// Click outside to close tooltip
+document.addEventListener('click', function() {
+  document.getElementById('code-tooltip').style.display = 'none';
+});
+
+// Function to open file - choose your integration method
+function openFile(filepath) {
+  const fullPath = sourceRoot + '/' + filepath;
+  console.log('Opening file:', fullPath);
+  
+  switch(FILE_OPEN_METHOD) {
+    case 'vscode':
+      // Method 1: VS Code URL scheme (VS Code must be installed)
+      window.location.href = `vscode://file/${fullPath}`;
+      showNotification(`Opening in VS Code: ${filepath}`);
+      break;
+      
+    case 'clipboard':
+      // Method 2: Copy to clipboard (default - always works)
+      navigator.clipboard.writeText(fullPath).then(() => {
+        showNotification(`Path copied: ${fullPath}`);
+      }).catch(() => {
+        // Fallback for older browsers
+        const textArea = document.createElement('textarea');
+        textArea.value = fullPath;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+        showNotification(`Path copied: ${fullPath}`);
+      });
+      break;
+      
+    case 'server':
+      // Method 3: Local Node.js server (requires server running)
+      fetch(`${SERVER_URL}/open-file`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file: fullPath })
+      }).then(response => {
+        if (response.ok) {
+          showNotification(`Opened: ${filepath}`);
+        } else {
+          showNotification(`Failed to open file. Is the server running?`, 'error');
+        }
+      }).catch(() => {
+        showNotification(`Cannot connect to server at ${SERVER_URL}`, 'error');
+      });
+      break;
+      
+    case 'custom':
+      // Method 4: Custom protocol handler (requires setup)
+      window.location.href = `valkey-search://open?file=${encodeURIComponent(fullPath)}`;
+      break;
+      
+    default:
+      alert(`Unknown method: ${FILE_OPEN_METHOD}`);
+  }
+}
+
+function showNotification(message, type = 'success') {
+  const notification = document.createElement('div');
+  const bgColor = type === 'error' ? '#f44336' : '#4CAF50';
+  notification.style.cssText = `
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: ${bgColor};
+    color: white;
+    padding: 15px 20px;
+    border-radius: 5px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    z-index: 10000;
+    max-width: 400px;
+  `;
+  notification.textContent = message;
+  document.body.appendChild(notification);
+  setTimeout(() => notification.remove(), 3000);
+}
+</script>
+</body>
+</html>
