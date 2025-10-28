@@ -176,8 +176,7 @@ void SendReplyTest::DoSendReplyTest(
   for (const auto &neighbor : input.neighbors) {
     neighbors.push_back(ToIndexesNeighbor(neighbor));
   }
-  auto parameters =
-      std::make_unique<query::VectorSearchParameters>(10000, nullptr);
+  auto parameters = std::make_unique<query::SearchParameters>(10000, nullptr);
   parameters->index_schema = test_index_schema;
   parameters->attribute_alias = attribute_alias;
   parameters->score_as = vmsdk::MakeUniqueValkeyString(score_as);
@@ -759,7 +758,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "params", "2", "query_vector", "$embedding",
                             "DIALECT", "2"},
             .expected_error_message =
-                "$112\r\nInvalid range: Value above maximum; KNN parameter "
+                "-Invalid range: Value above maximum; KNN parameter "
                 "must be a positive integer greater than 0 and cannot exceed "
                 "5.\r\n",
         },
@@ -778,7 +777,7 @@ INSTANTIATE_TEST_SUITE_P(
                  "*=>[KNN 3 @vector $query_vector EF_RUNTIME 6 AS score]",
                  "params", "2", "query_vector", "$embedding", "DIALECT", "2"},
             .expected_error_message =
-                "$111\r\nInvalid range: Value above maximum; `EF_RUNTIME` must "
+                "-Invalid range: Value above maximum; `EF_RUNTIME` must "
                 "be a positive integer greater than 0 and cannot exceed 5.\r\n",
         },
     }),

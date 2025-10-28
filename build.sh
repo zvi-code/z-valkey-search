@@ -6,6 +6,7 @@ ROOT_DIR=$(readlink -f $(dirname $0))
 VERBOSE_ARGS=""
 CMAKE_TARGET=""
 CMAKE_EXTRA_ARGS=""
+FORMAT="no"
 RUN_TEST=""
 RUN_BUILD="yes"
 DUMP_TEST_ERRORS_STDOUT="no"
@@ -28,6 +29,7 @@ Usage: build.sh [options...]
     --verbose | -v                    Run verbose build.
     --debug                           Build for debug version.
     --clean                           Clean the current build configuration (debug or release).
+    --format                          Applies clang-format. (Run in dev container environment to ensure correct clang-format version)
     --run-tests                       Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>".
     --no-build                        By default, build.sh always triggers a build. This option disables this behavior.
     --test-errors-stdout              When a test fails, dump the captured tests output to stdout.
@@ -73,6 +75,10 @@ while [ $# -gt 0 ]; do
         RUN_BUILD="no"
         echo "Running build: no"
         ;;
+    --format)
+        FORMAT="yes"
+        shift || true
+        ;;
     --run-tests)
         RUN_TEST="all"
         shift || true
@@ -83,10 +89,22 @@ while [ $# -gt 0 ]; do
         shift || true
         echo "Running test ${RUN_TEST}"
         ;;
+    --unittest-output=*)
+        UNITTEST_OUTPUT="${arg#*=}"
+        shift || true
+        # echo "Unit Test Output Directory: ${UNITTEST_OUTPUT} ** not yet implemented **"
+        # Not currently implemented in build.sh, but used by upstream build_ubuntu.sh
+        ;;
     --run-integration-tests)
         INTEGRATION_TEST="yes"
         shift || true
         echo "Running integration tests (all)"
+        ;;
+    --integration-output=*)
+        INTEGRATION_OUTPUT="${arg#*=}"
+        shift || true
+        # echo "Integration Test Output Directory: ${INTEGRATION_OUTPUT} ** not yet implemented **"
+        # Not currently implemented in build.sh, but used by upstream build_ubuntu.sh
         ;;
     --run-integration-tests=*)
         INTEGRATION_TEST="yes"
@@ -134,6 +152,7 @@ while [ $# -gt 0 ]; do
         exit 0
         ;;
     *)
+        echo "Unknown argument: ${arg}"
         print_usage
         exit 1
         ;;
@@ -142,6 +161,7 @@ done
 
 # Import our functions, needs to be done after parsing the command line arguments
 export SAN_BUILD
+export ROOT_DIR
 . ${ROOT_DIR}/scripts/common.rc
 
 function configure() {
@@ -177,6 +197,13 @@ function build() {
         printf "To load the module, execute the following command:\n"
         printf "    valkey-server --loadmodule ${BUILD_DIR}/libsearch.${MODULE_EXT}\n\n"
     fi
+}
+
+function format() {
+    cd ${ROOT_DIR}
+    printf "Formatting...\n"
+    find src testing vmsdk/src vmsdk/testing -name "*.h" -o -name "*.cc" | xargs clang-format -i
+    printf "Applied clang-format\n"
 }
 
 function print_test_prefix() {
@@ -276,6 +303,10 @@ cleanup() {
 # Ensure cleanup runs on exit
 trap cleanup EXIT
 export CMAKE_POLICY_VERSION_MINIMUM=3.5
+
+if [[ "${FORMAT}" == "yes" ]]; then
+    format
+fi
 
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
 if [[ "${SAN_BUILD}" != "no" ]]; then
