@@ -176,7 +176,8 @@ void SendReplyTest::DoSendReplyTest(
   for (const auto &neighbor : input.neighbors) {
     neighbors.push_back(ToIndexesNeighbor(neighbor));
   }
-  auto parameters = std::make_unique<query::SearchParameters>(10000, nullptr);
+  auto parameters = std::make_unique<SearchCommand>(0);
+  parameters->timeout_ms = 10000;
   parameters->index_schema = test_index_schema;
   parameters->attribute_alias = attribute_alias;
   parameters->score_as = vmsdk::MakeUniqueValkeyString(score_as);
@@ -187,8 +188,10 @@ void SendReplyTest::DoSendReplyTest(
     parameters->return_attributes.push_back(
         ToReturnAttribute(return_attribute));
   }
-  SendReply(&fake_ctx, neighbors, *parameters);
-
+  auto neighbor_count = neighbors.size();
+  query::SearchResult wrapper(neighbor_count, std::move(neighbors),
+                              *parameters);
+  parameters->SendReply(&fake_ctx, wrapper);
   EXPECT_EQ(ParseRespReply(fake_ctx.reply_capture.GetReply()), expected_output);
 }
 
@@ -468,7 +471,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
   auto &params = GetParam();
   bool use_thread_pool = std::get<1>(params);
   if (use_thread_pool) {
-    InitThreadPools(5, std::nullopt);
+    InitThreadPools(5, std::nullopt, 1);
   }
   bool use_fanout = std::get<0>(params);
   if (use_fanout) {
@@ -530,7 +533,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
             GetClient(testing::StrEq(absl::StrCat("127.0.0.1:", coord_port))))
             .WillRepeatedly(testing::Return(mock_client));
         EXPECT_CALL(*mock_client, SearchIndexPartition(testing::_, testing::_))
-            .WillRepeatedly(testing::Invoke(
+            .WillRepeatedly(
                 [&](std::unique_ptr<coordinator::SearchIndexPartitionRequest>
                         request,
                     coordinator::SearchIndexPartitionCallback done) {
@@ -538,7 +541,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
                   // nothing.
                   coordinator::SearchIndexPartitionResponse response;
                   done(grpc::Status::OK, response);
-                }));
+                });
       }
     }
   }
