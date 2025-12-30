@@ -80,6 +80,12 @@ int UpperBoundToMultipleOf16(int num) { return (num + 15) & ~15; }
 FixedSizeAllocator::FixedSizeAllocator(size_t size, bool require_ptr_alignment)
     : size_(size), require_ptr_alignment_(require_ptr_alignment) {
   if (require_ptr_alignment_) {
+    // 16-byte alignment is unconditionally beneficial on all modern platforms:
+    // - Required for ARM NEON (128-bit vectors)
+    // - Required for x86 SSE (128-bit vectors)
+    // - Optimal for AVX (256-bit can efficiently use aligned 128-bit pairs)
+    // - Memory overhead is minimal (at most 15 bytes per allocation)
+    // Keeping this unconditional ensures consistent behavior and simpler code.
     size_ = UpperBoundToMultipleOf16(size);
   }
 }

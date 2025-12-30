@@ -41,17 +41,26 @@ namespace hnswlib {
 typedef unsigned int tableint;
 typedef unsigned int linklistsizeint;
 
-// Helper function to safely compare distances even with --fast-math.
-// With --fast-math, NaN comparisons can behave unpredictably, causing
-// infinite loops in convergence checks. This function ensures correct
-// NaN handling by disabling fast-math optimizations only for this comparison.
+// Helper function to safely compare distances even with -ffast-math.
+//
+// Problem: With -ffast-math, the compiler assumes no NaNs/Infs exist, so:
+//   - NaN comparisons become undefined behavior
+//   - std::isless() may be optimized to a simple '<' comparison
+//   - This can cause infinite loops when distances become NaN
+//
+// Solution: Use explicit NaN check that works regardless of -ffast-math.
+// The volatile qualifier prevents the compiler from optimizing away the
+// self-comparison NaN check (NaN != NaN is always true per IEEE 754).
 template <typename dist_t>
-#if defined(__GNUC__) && !defined(__clang__)
-__attribute__((optimize("no-fast-math", "no-unsafe-math-optimizations")))
-#endif
-inline bool
-is_closer_distance(dist_t new_dist, dist_t current_dist) {
-  return std::isless(new_dist, current_dist);
+inline bool is_closer_distance(dist_t new_dist, dist_t current_dist) {
+  // Explicit NaN check - portable across all compilers and optimization levels
+  // volatile prevents compiler from optimizing away the NaN check under -ffast-math
+  volatile dist_t n = new_dist;
+  volatile dist_t c = current_dist;
+  // NaN check: x != x is true only for NaN (IEEE 754)
+  // Return false if either distance is NaN to avoid infinite loops
+  if (n != n || c != c) return false;
+  return n < c;
 }
 
 template <typename dist_t>

@@ -18,7 +18,25 @@ else()
   message(STATUS "Current platform is aarch64")
   set(VALKEY_SEARCH_IS_ARM 1)
   set(VALKEY_SEARCH_IS_X86 0)
-  set(VALKEY_SEARCH_IS_GRAV 0)
+  
+  # Detect AWS Graviton by checking for Neoverse cores in /proc/cpuinfo
+  # Graviton2: Neoverse-N1, Graviton3: Neoverse-V1, Graviton4: Neoverse-V2
+  if(EXISTS "/proc/cpuinfo")
+    execute_process(
+      COMMAND grep -c "Neoverse" /proc/cpuinfo
+      OUTPUT_VARIABLE NEOVERSE_COUNT
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET
+    )
+    if(NEOVERSE_COUNT GREATER 0)
+      set(VALKEY_SEARCH_IS_GRAV 1)
+      message(STATUS "Detected AWS Graviton processor (Neoverse core)")
+    else()
+      set(VALKEY_SEARCH_IS_GRAV 0)
+    endif()
+  else()
+    set(VALKEY_SEARCH_IS_GRAV 0)
+  endif()
 endif()
 
 # Check for compiler compatibility
@@ -104,6 +122,21 @@ function(valkey_search_target_update_compile_flags TARGET)
   target_compile_options(${TARGET} PRIVATE -ffp-contract=off)
   target_compile_options(${TARGET} PRIVATE -fno-rounding-math)
   if(VALKEY_SEARCH_IS_X86)
+    # x86_64 SIMD compilation flags
+    # References:
+    # - GCC x86 options: https://gcc.gnu.org/onlinedocs/gcc/x86-Options.html
+    # - Intel intrinsics guide: https://www.intel.com/content/www/us/en/docs/intrinsics-guide/
+    # - x86-64 microarchitecture levels: https://en.wikipedia.org/wiki/X86-64#Microarchitecture_levels
+    #
+    # Flag explanations:
+    # - mcx16: CMPXCHG16B for 128-bit atomic operations (x86-64-v2+)
+    # - msse4.2: SSE4.2 SIMD instructions (x86-64-v2+)
+    # - mpclmul: Carry-less multiplication for CRC/crypto (x86-64-v2+)
+    # - mavx/mavx2: 256-bit SIMD operations (x86-64-v3+)
+    # - maes: AES-NI hardware encryption (x86-64-v2+)
+    # - mfma: Fused multiply-add for vector dot products (x86-64-v3+)
+    # - mprfchw: PREFETCHW instruction support
+    # - mf16c: Half-precision float conversion, equiv to ARM fp16 (x86-64-v3+)
     target_compile_options(${TARGET} PRIVATE -mcx16)
     target_compile_options(${TARGET} PRIVATE -msse4.2)
     target_compile_options(${TARGET} PRIVATE -mpclmul)
@@ -112,41 +145,67 @@ function(valkey_search_target_update_compile_flags TARGET)
     target_compile_options(${TARGET} PRIVATE -maes)
     target_compile_options(${TARGET} PRIVATE -mfma)
     target_compile_options(${TARGET} PRIVATE -mprfchw)
+    # F16C - half-precision float conversion (equivalent to ARM fp16)
+    # Available on Intel Ivy Bridge+ (2012), AMD Bulldozer+ (2011)
+    target_compile_options(${TARGET} PRIVATE -mf16c)
   elseif(VALKEY_SEARCH_IS_GRAV)
     # Graviton-optimized compilation flags
-    # Reference: https://aws.github.io/graviton/perfrunbook/optimization_recommendation.html
- 
-    # Base architecture flags for Graviton2+ (armv8.2-a with key extensions)
-    # - crypto: AES/SHA acceleration
-    # - fp16: Half-precision floating point (critical for ML workloads)+
-    # - rcpc: Release Consistent Processor Consistent (better atomics)
-    # - dotprod: Dot product instructions (critical for vector operations)
+    # References:
+    # - AWS Graviton optimization guide: https://github.com/aws/aws-graviton-getting-started/blob/main/c-c++.md
+    # - ARM architecture extensions: https://developer.arm.com/documentation/dui0774/latest/armclang-Reference/armclang-Command-line-Options/-march
+    # - GCC AArch64 options: https://gcc.gnu.org/onlinedocs/gcc/AArch64-Options.html
+    # - Graviton performance runbook: https://aws.github.io/graviton/perfrunbook/optimization_recommendation.html
+    #
+    # Base architecture flags for Graviton2+ (armv8.2-a with key extensions):
+    # - crypto: Hardware AES/SHA acceleration (Graviton2+)
+    # - fp16: Half-precision floating point for ML workloads (Graviton2+)
+    # - rcpc: Release Consistent Processor Consistent for better atomics (Graviton2+)
+    # - dotprod: SDOT/UDOT int8 dot product instructions, critical for vector ops (Graviton2+)
     target_compile_options(${TARGET} PRIVATE
       -march=armv8.2-a+crypto+fp16+rcpc+dotprod
     )
+    # Tune for Neoverse-N1 (Graviton2 microarchitecture)
+    # Graviton3 uses Neoverse-V1, but N1 tuning is compatible
     target_compile_options(${TARGET} PRIVATE -mtune=neoverse-n1)
-    # target_compile_options(${TARGET} PRIVATE
-    #   -falign-functions=32    # Function entry alignment
-    #   -falign-loops=16        # Loop alignment
-    #   -falign-jumps=16        # Branch target alignment
-    # )
-    # target_compile_options(${TARGET} PRIVATE -fprefetch-loop-arrays)
-        # Try to detect SVE support for Graviton3+ optimization
-    # SVE provides 30-50% improvement on vector operations on Graviton3
+
+    # Detect SVE/SVE2 support for Graviton3+/Graviton4+ optimization
+    # - SVE (Graviton3/Neoverse-V1): ~30-50% improvement on vector operations
+    # - SVE2 (Graviton4/Neoverse-V2): Additional instructions for better performance
+    #
+    # Detection method: Attempt to compile with SVE/SVE2 flags
+    # -E: Preprocess only (fast check, no actual compilation)
+    # -x c: Treat input as C source (standard compiler flag)
+    # /dev/null: Empty input file
+    
+    # First, try SVE2 (Graviton4+ / armv9-a based on Neoverse-V2)
     execute_process(
-      COMMAND ${CMAKE_CXX_COMPILER} -march=armv8.2-a+sve -E -x c /dev/null
-      RESULT_VARIABLE SVE_TEST_RESULT
+      COMMAND ${CMAKE_CXX_COMPILER} -march=armv9-a+sve2 -E -x c /dev/null
+      RESULT_VARIABLE SVE2_TEST_RESULT
       OUTPUT_QUIET
       ERROR_QUIET
     )
     
-    if(SVE_TEST_RESULT EQUAL 0)
-      message(STATUS "Compiler supports SVE - enabling for ${TARGET}")
-      # Note: SIMSIMD will handle runtime dispatch, we just enable compilation
+    if(SVE2_TEST_RESULT EQUAL 0)
+      message(STATUS "Compiler supports SVE2 - enabling for ${TARGET} (Graviton4+)")
+      # Note: SIMSIMD will handle runtime dispatch, we just enable compilation support
+      target_compile_definitions(${TARGET} PRIVATE VALKEY_SEARCH_SVE2_AVAILABLE=1)
       target_compile_definitions(${TARGET} PRIVATE VALKEY_SEARCH_SVE_AVAILABLE=1)
     else()
-      message(STATUS "Compiler doesn't support SVE for ${TARGET}")
-  endif()    
+      # Fall back to SVE (Graviton3 / armv8.2-a+sve)
+      execute_process(
+        COMMAND ${CMAKE_CXX_COMPILER} -march=armv8.2-a+sve -E -x c /dev/null
+        RESULT_VARIABLE SVE_TEST_RESULT
+        OUTPUT_QUIET
+        ERROR_QUIET
+      )
+      
+      if(SVE_TEST_RESULT EQUAL 0)
+        message(STATUS "Compiler supports SVE - enabling for ${TARGET} (Graviton3+)")
+        target_compile_definitions(${TARGET} PRIVATE VALKEY_SEARCH_SVE_AVAILABLE=1)
+      else()
+        message(STATUS "Compiler doesn't support SVE for ${TARGET}")
+      endif()
+    endif()
   endif()
   target_compile_options(${TARGET} PRIVATE -mtune=generic)
   target_compile_options(${TARGET} PRIVATE -gdwarf-5)
@@ -229,7 +288,7 @@ macro(finalize_test_flags __TARGET)
     target_link_libraries(${__TARGET} PRIVATE lib_to_add_end_group_flag)
   endif()
 
-  if(VALKEY_SEARCH_IS_ARM)
+  if(VALKEY_SEARCH_IS_ARM OR VALKEY_SEARCH_IS_GRAV)
     target_link_libraries(${__TARGET} PRIVATE pthread)
   endif()
   target_link_libraries(${__TARGET} PRIVATE GTest::gtest GTest::gtest_main
