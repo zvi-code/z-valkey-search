@@ -13,16 +13,19 @@ valkey_search_create_proto_library("third_party/hnswlib/index.proto"
 add_library(hnswlib_vmsdk INTERFACE ${SRCS_HNSWLIB_VMSDK})
 target_include_directories(hnswlib_vmsdk INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(hnswlib_vmsdk INTERFACE iostream)
-target_link_libraries(hnswlib_vmsdk INTERFACE simsimd)
+target_link_libraries(hnswlib_vmsdk INTERFACE simd_metrics)
 target_link_libraries(hnswlib_vmsdk INTERFACE vmsdklib)
 target_compile_definitions(hnswlib_vmsdk
                            INTERFACE VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES)
 target_link_libraries(hnswlib_vmsdk INTERFACE index_cc_proto)
 
+# Keep the old simsimd interface library for backward compatibility, but empty
 set(SRCS_SIMSIMD ${CMAKE_CURRENT_LIST_DIR}/simsimd.h)
 
 add_library(simsimd INTERFACE ${SRCS_SIMSIMD})
 target_include_directories(simsimd INTERFACE ${CMAKE_CURRENT_LIST_DIR})
+# simsimd now uses simd_metrics internally
+target_link_libraries(simsimd INTERFACE simd_metrics)
 
 set(SRCS_IOSTREAM ${CMAKE_CURRENT_LIST_DIR}/iostream.h)
 

@@ -1,0 +1,300 @@
+/*
+ * Copyright (c) 2025, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ * ARM SVE implementation (armv8.2-a+sve).
+ * Optimized for Graviton3 with scalable vector extensions.
+ * SVE provides 256-bit vectors on Graviton3 (2x128-bit NEON).
+ */
+
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
+
+#include <arm_sve.h>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+
+#include "src/simd_metrics/cpu_caps.h"
+#include "src/simd_metrics/simd_internal.h"
+
+namespace {
+
+// ============================================
+// L2 Squared Distance
+// ============================================
+
+float l2sq_f32_sve(const float *a, const float *b, size_t dim) {
+  svfloat32_t sum = svdup_f32(0.0f);
+  size_t i = 0;
+
+  // SVE uses predicated operations - handles any vector length
+  while (i < dim) {
+    svbool_t pg = svwhilelt_b32(i, dim);
+    svfloat32_t va = svld1_f32(pg, a + i);
+    svfloat32_t vb = svld1_f32(pg, b + i);
+    svfloat32_t diff = svsub_f32_x(pg, va, vb);
+    sum = svmla_f32_x(pg, sum, diff, diff);
+    i += svcntw();
+  }
+
+  return svaddv_f32(svptrue_b32(), sum);
+}
+
+float l2sq_f16_sve(const uint16_t *a, const uint16_t *b, size_t dim) {
+  svfloat32_t sum = svdup_f32(0.0f);
+  size_t i = 0;
+
+  while (i < dim) {
+    svbool_t pg = svwhilelt_b16(i, dim);
+    svfloat16_t va_f16 =
+        svld1_f16(pg, reinterpret_cast<const float16_t *>(a + i));
+    svfloat16_t vb_f16 =
+        svld1_f16(pg, reinterpret_cast<const float16_t *>(b + i));
+
+    // Convert to FP32 and compute
+    svfloat32_t va = svcvt_f32_f16_x(svptrue_b32(), svget_f16(va_f16, 0));
+    svfloat32_t vb = svcvt_f32_f16_x(svptrue_b32(), svget_f16(vb_f16, 0));
+    svfloat32_t diff = svsub_f32_x(svptrue_b32(), va, vb);
+    sum = svmla_f32_x(svptrue_b32(), sum, diff, diff);
+
+    i += svcnth();
+  }
+
+  return svaddv_f32(svptrue_b32(), sum);
+}
+
+float l2sq_i8_sve(const int8_t *a, const int8_t *b, size_t dim) {
+  svint32_t sum = svdup_s32(0);
+  size_t i = 0;
+
+  while (i < dim) {
+    svbool_t pg = svwhilelt_b8(i, dim);
+    svint8_t va = svld1_s8(pg, a + i);
+    svint8_t vb = svld1_s8(pg, b + i);
+
+    // Compute diff and widen to int16
+    svint8_t diff = svsub_s8_x(pg, va, vb);
+
+    // Square via widening multiply (diff * diff)
+    svint16_t diff_lo = svmovlb_s16(diff);
+    svint16_t diff_hi = svmovlt_s16(diff);
+    svint32_t sq_lo = svmullb_s32(diff_lo, diff_lo);
+    svint32_t sq_hi = svmullt_s32(diff_lo, diff_lo);
+    svint32_t sq_lo2 = svmullb_s32(diff_hi, diff_hi);
+    svint32_t sq_hi2 = svmullt_s32(diff_hi, diff_hi);
+
+    sum = svadd_s32_x(svptrue_b32(), sum, sq_lo);
+    sum = svadd_s32_x(svptrue_b32(), sum, sq_hi);
+    sum = svadd_s32_x(svptrue_b32(), sum, sq_lo2);
+    sum = svadd_s32_x(svptrue_b32(), sum, sq_hi2);
+
+    i += svcntb();
+  }
+
+  return static_cast<float>(svaddv_s32(svptrue_b32(), sum));
+}
+
+// ============================================
+// Inner Product
+// ============================================
+
+float ip_f32_sve(const float *a, const float *b, size_t dim) {
+  svfloat32_t sum = svdup_f32(0.0f);
+  size_t i = 0;
+
+  while (i < dim) {
+    svbool_t pg = svwhilelt_b32(i, dim);
+    svfloat32_t va = svld1_f32(pg, a + i);
+    svfloat32_t vb = svld1_f32(pg, b + i);
+    sum = svmla_f32_x(pg, sum, va, vb);
+    i += svcntw();
+  }
+
+  return svaddv_f32(svptrue_b32(), sum);
+}
+
+float ip_f16_sve(const uint16_t *a, const uint16_t *b, size_t dim) {
+  svfloat32_t sum = svdup_f32(0.0f);
+  size_t i = 0;
+
+  while (i < dim) {
+    svbool_t pg = svwhilelt_b16(i, dim);
+    svfloat16_t va_f16 =
+        svld1_f16(pg, reinterpret_cast<const float16_t *>(a + i));
+    svfloat16_t vb_f16 =
+        svld1_f16(pg, reinterpret_cast<const float16_t *>(b + i));
+
+    svfloat32_t va = svcvt_f32_f16_x(svptrue_b32(), svget_f16(va_f16, 0));
+    svfloat32_t vb = svcvt_f32_f16_x(svptrue_b32(), svget_f16(vb_f16, 0));
+    sum = svmla_f32_x(svptrue_b32(), sum, va, vb);
+
+    i += svcnth();
+  }
+
+  return svaddv_f32(svptrue_b32(), sum);
+}
+
+float ip_i8_sve(const int8_t *a, const int8_t *b, size_t dim) {
+  svint32_t sum = svdup_s32(0);
+  size_t i = 0;
+
+  while (i < dim) {
+    svbool_t pg = svwhilelt_b8(i, dim);
+    svint8_t va = svld1_s8(pg, a + i);
+    svint8_t vb = svld1_s8(pg, b + i);
+
+    // Widening multiply-add
+    svint16_t prod_lo = svmullb_s16(va, vb);
+    svint16_t prod_hi = svmullt_s16(va, vb);
+
+    sum = svaddwb_s32(sum, prod_lo);
+    sum = svaddwt_s32(sum, prod_lo);
+    sum = svaddwb_s32(sum, prod_hi);
+    sum = svaddwt_s32(sum, prod_hi);
+
+    i += svcntb();
+  }
+
+  return static_cast<float>(svaddv_s32(svptrue_b32(), sum));
+}
+
+// ============================================
+// Cosine Similarity
+// ============================================
+
+float cosine_f32_sve(const float *a, const float *b, size_t dim) {
+  svfloat32_t dot_sum = svdup_f32(0.0f);
+  svfloat32_t a2_sum = svdup_f32(0.0f);
+  svfloat32_t b2_sum = svdup_f32(0.0f);
+  size_t i = 0;
+
+  while (i < dim) {
+    svbool_t pg = svwhilelt_b32(i, dim);
+    svfloat32_t va = svld1_f32(pg, a + i);
+    svfloat32_t vb = svld1_f32(pg, b + i);
+
+    dot_sum = svmla_f32_x(pg, dot_sum, va, vb);
+    a2_sum = svmla_f32_x(pg, a2_sum, va, va);
+    b2_sum = svmla_f32_x(pg, b2_sum, vb, vb);
+
+    i += svcntw();
+  }
+
+  float dot = svaddv_f32(svptrue_b32(), dot_sum);
+  float a2 = svaddv_f32(svptrue_b32(), a2_sum);
+  float b2 = svaddv_f32(svptrue_b32(), b2_sum);
+
+  float denom = std::sqrt(a2) * std::sqrt(b2);
+  return (denom > 0.0f) ? (dot / denom) : 0.0f;
+}
+
+float cosine_f16_sve(const uint16_t *a, const uint16_t *b, size_t dim) {
+  svfloat32_t dot_sum = svdup_f32(0.0f);
+  svfloat32_t a2_sum = svdup_f32(0.0f);
+  svfloat32_t b2_sum = svdup_f32(0.0f);
+  size_t i = 0;
+
+  while (i < dim) {
+    svbool_t pg = svwhilelt_b16(i, dim);
+    svfloat16_t va_f16 =
+        svld1_f16(pg, reinterpret_cast<const float16_t *>(a + i));
+    svfloat16_t vb_f16 =
+        svld1_f16(pg, reinterpret_cast<const float16_t *>(b + i));
+
+    svfloat32_t va = svcvt_f32_f16_x(svptrue_b32(), svget_f16(va_f16, 0));
+    svfloat32_t vb = svcvt_f32_f16_x(svptrue_b32(), svget_f16(vb_f16, 0));
+
+    dot_sum = svmla_f32_x(svptrue_b32(), dot_sum, va, vb);
+    a2_sum = svmla_f32_x(svptrue_b32(), a2_sum, va, va);
+    b2_sum = svmla_f32_x(svptrue_b32(), b2_sum, vb, vb);
+
+    i += svcnth();
+  }
+
+  float dot = svaddv_f32(svptrue_b32(), dot_sum);
+  float a2 = svaddv_f32(svptrue_b32(), a2_sum);
+  float b2 = svaddv_f32(svptrue_b32(), b2_sum);
+
+  float denom = std::sqrt(a2) * std::sqrt(b2);
+  return (denom > 0.0f) ? (dot / denom) : 0.0f;
+}
+
+float cosine_i8_sve(const int8_t *a, const int8_t *b, size_t dim) {
+  // Use scalar fallback for simplicity - INT8 cosine is rare
+  int64_t dot = 0, a2 = 0, b2 = 0;
+  for (size_t i = 0; i < dim; i++) {
+    int32_t ai = static_cast<int32_t>(a[i]);
+    int32_t bi = static_cast<int32_t>(b[i]);
+    dot += ai * bi;
+    a2 += ai * ai;
+    b2 += bi * bi;
+  }
+  float denom =
+      std::sqrt(static_cast<float>(a2)) * std::sqrt(static_cast<float>(b2));
+  return (denom > 0.0f) ? (static_cast<float>(dot) / denom) : 0.0f;
+}
+
+// ============================================
+// Batch Operations with SVE prefetch
+// ============================================
+
+void l2sq_f32_batch_sve(const float *query, const float *const *vectors,
+                        size_t dim, size_t count, float *results) {
+  const size_t prefetch_dist = 4;
+
+  for (size_t i = 0; i < count; i++) {
+    // SVE prefetch
+    if (i + prefetch_dist < count) {
+      svprfw(svptrue_b32(), vectors[i + prefetch_dist], SV_PLDL1STRM);
+    }
+    results[i] = l2sq_f32_sve(query, vectors[i], dim);
+  }
+}
+
+void ip_f32_batch_sve(const float *query, const float *const *vectors,
+                      size_t dim, size_t count, float *results) {
+  const size_t prefetch_dist = 4;
+
+  for (size_t i = 0; i < count; i++) {
+    if (i + prefetch_dist < count) {
+      svprfw(svptrue_b32(), vectors[i + prefetch_dist], SV_PLDL1STRM);
+    }
+    results[i] = ip_f32_sve(query, vectors[i], dim);
+  }
+}
+
+}  // namespace
+
+extern "C" {
+
+const metrics_impl_t metrics_impl_sve = {
+    .l2sq_f32 = l2sq_f32_sve,
+    .l2sq_f16 = l2sq_f16_sve,
+    .l2sq_i8 = l2sq_i8_sve,
+    .ip_f32 = ip_f32_sve,
+    .ip_f16 = ip_f16_sve,
+    .ip_i8 = ip_i8_sve,
+    .cosine_f32 = cosine_f32_sve,
+    .cosine_f16 = cosine_f16_sve,
+    .cosine_i8 = cosine_i8_sve,
+    .l2sq_f32_batch = l2sq_f32_batch_sve,
+    .ip_f32_batch = ip_f32_batch_sve,
+    .name = "sve",
+    .caps = CPU_CAP_NEON | CPU_CAP_SVE,
+};
+
+}  // extern "C"
+
+#else  // No SVE support at compile time
+
+// Provide a stub that falls back to NEON
+#include "src/simd_metrics/cpu_caps.h"
+#include "src/simd_metrics/simd_internal.h"
+
+extern "C" {
+extern const metrics_impl_t metrics_impl_neon;
+const metrics_impl_t metrics_impl_sve = metrics_impl_neon;
+}
+
+#endif  // __aarch64__ && __ARM_FEATURE_SVE

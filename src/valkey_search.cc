@@ -31,6 +31,7 @@
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
+#include "src/simd_metrics/simd_metrics.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
@@ -1105,6 +1106,11 @@ void ValkeySearch::ResumeWriterThreadPool(ValkeyModuleCtx *ctx,
 absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
                                   ValkeyModuleString **argv, int argc) {
   ctx_ = ValkeyModule_GetDetachedThreadSafeContext(ctx);
+
+  // Initialize SIMD metrics dispatch (one-time CPU capability detection)
+  metrics_init();
+  VMSDK_LOG(NOTICE, ctx) << "SIMD metrics initialized: "
+                         << metrics_impl_name();
 
   // Register a single module type for Aux load/save callbacks.
   VMSDK_RETURN_IF_ERROR(RegisterModuleType(ctx));
