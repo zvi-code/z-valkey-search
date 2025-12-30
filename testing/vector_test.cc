@@ -46,14 +46,28 @@ constexpr static uint32_t kBlockSize = 250;
 constexpr static int kM = 16;
 constexpr static int kEFConstruction = 20;
 constexpr static int kEFRuntime = 20;
-const hnswlib::InnerProductSpace kInnerProductSpace{kDimensions};
-const hnswlib::L2Space kL2Space{kDimensions};
-const absl::flat_hash_map<data_model::DistanceMetric, std::string>
-    kExpectedSpaces = {
-        {data_model::DISTANCE_METRIC_COSINE, typeid(kInnerProductSpace).name()},
-        {data_model::DISTANCE_METRIC_IP, typeid(kInnerProductSpace).name()},
-        {data_model::DISTANCE_METRIC_L2, typeid(kL2Space).name()},
-};
+
+// Helper function to get expected space type names
+// Note: We can't use global HNSW space objects because they would be
+// initialized before metrics::Init() is called in test setup.
+std::string GetExpectedSpaceName(data_model::DistanceMetric metric) {
+  // Create temporary space objects to get their type names
+  // This is called after metrics::Init() in test setup
+  static const std::string kInnerProductSpaceName = 
+      typeid(hnswlib::InnerProductSpace).name();
+  static const std::string kL2SpaceName = 
+      typeid(hnswlib::L2Space).name();
+  
+  switch (metric) {
+    case data_model::DISTANCE_METRIC_COSINE:
+    case data_model::DISTANCE_METRIC_IP:
+      return kInnerProductSpaceName;
+    case data_model::DISTANCE_METRIC_L2:
+      return kL2SpaceName;
+    default:
+      return "";
+  }
+}
 
 static cancel::Token& CancelNever() {
   static cancel::Token cancel_never = cancel::Make(1000000, nullptr);
@@ -87,24 +101,34 @@ void TestInitializationHNSW(int dimensions,
 }
 
 TEST_F(VectorIndexTest, InitializationHNSW) {
-  for (auto& distance_metric : kExpectedSpaces) {
-    TestInitializationHNSW(kDimensions, distance_metric.first,
-                           distance_metric.second, kInitialCap, kM,
+  std::vector<data_model::DistanceMetric> metrics = {
+      data_model::DISTANCE_METRIC_COSINE,
+      data_model::DISTANCE_METRIC_IP,
+      data_model::DISTANCE_METRIC_L2
+  };
+  for (auto& distance_metric : metrics) {
+    TestInitializationHNSW(kDimensions, distance_metric,
+                           GetExpectedSpaceName(distance_metric), kInitialCap, kM,
                            kEFConstruction, kEFRuntime);
   }
 }
 TEST_F(VectorIndexTest, InitializationFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
-  for (auto& distance_metric : kExpectedSpaces) {
+  std::vector<data_model::DistanceMetric> metrics = {
+      data_model::DISTANCE_METRIC_COSINE,
+      data_model::DISTANCE_METRIC_IP,
+      data_model::DISTANCE_METRIC_L2
+  };
+  for (auto& distance_metric : metrics) {
     auto index = VectorFlat<float>::Create(
-        CreateFlatVectorIndexProto(kDimensions, distance_metric.first,
+        CreateFlatVectorIndexProto(kDimensions, distance_metric,
                                    kInitialCap, kBlockSize),
         "attribute_identifier_1",
         data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
     auto* space = index.value()->GetSpace();
-    EXPECT_EQ(distance_metric.second, typeid(*space).name());
+    EXPECT_EQ(GetExpectedSpaceName(distance_metric), typeid(*space).name());
     EXPECT_EQ(index.value()->GetDimensions(), kDimensions);
     EXPECT_EQ(index.value()->GetNormalize(),
-              distance_metric.first == data_model::DISTANCE_METRIC_COSINE);
+              distance_metric == data_model::DISTANCE_METRIC_COSINE);
     EXPECT_EQ(index.value()->GetCapacity(), kInitialCap);
     EXPECT_EQ(index.value()->GetBlockSize(), kBlockSize);
   }

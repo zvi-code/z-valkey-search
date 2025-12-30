@@ -41,6 +41,8 @@
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "src/vector_externalizer.h"
+#include "src/metrics/metrics.h"
+#include "third_party/hnswlib/iostream.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -345,6 +347,7 @@ class ValkeySearchTest : public vmsdk::ValkeyTest {
 
   void SetUp() override {
     ValkeyTest::SetUp();
+    metrics::Init();  // Initialize metrics system before any HNSW operations
     ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
     KeyspaceEventManager::InitInstance(
         std::make_unique<TestableKeyspaceEventManager>());
@@ -362,6 +365,7 @@ class ValkeySearchTest : public vmsdk::ValkeyTest {
     ValkeySearch::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
     VectorExternalizer::Instance().Reset();
+    metrics::Fini();  // Clean up metrics system
     ValkeyTest::TearDown();
   }
 };
@@ -407,6 +411,7 @@ class ValkeySearchTestWithParam : public vmsdk::ValkeyTestWithParam<T> {
 
   void SetUp() override {
     vmsdk::ValkeyTestWithParam<T>::SetUp();
+    metrics::Init();  // Initialize metrics system before any HNSW operations
     ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
     KeyspaceEventManager::InitInstance(
         std::make_unique<TestableKeyspaceEventManager>());
@@ -424,6 +429,7 @@ class ValkeySearchTestWithParam : public vmsdk::ValkeyTestWithParam<T> {
     ValkeySearch::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
     VectorExternalizer::Instance().Reset();
+    metrics::Fini();  // Clean up metrics system
     vmsdk::ValkeyTestWithParam<T>::TearDown();
   }
 };

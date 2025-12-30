@@ -1,3 +1,43 @@
+# CPU Capabilities Test
+set(SRCS_CPU_CAPS_TEST ${CMAKE_CURRENT_LIST_DIR}/cpu_caps_test.cc)
+
+add_executable(cpu_caps_test ${SRCS_CPU_CAPS_TEST})
+target_include_directories(cpu_caps_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(cpu_caps_test PUBLIC valkey_metrics)
+finalize_test_flags(cpu_caps_test)
+
+# Metrics Scalar Property Tests
+set(SRCS_METRICS_SCALAR_TEST ${CMAKE_CURRENT_LIST_DIR}/metrics_scalar_test.cc)
+
+add_executable(metrics_scalar_test ${SRCS_METRICS_SCALAR_TEST})
+target_include_directories(metrics_scalar_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(metrics_scalar_test PUBLIC valkey_metrics)
+finalize_test_flags(metrics_scalar_test)
+
+# Metrics Dispatch Property Tests
+set(SRCS_METRICS_DISPATCH_TEST ${CMAKE_CURRENT_LIST_DIR}/metrics_dispatch_test.cc)
+
+add_executable(metrics_dispatch_test ${SRCS_METRICS_DISPATCH_TEST})
+target_include_directories(metrics_dispatch_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(metrics_dispatch_test PUBLIC valkey_metrics)
+finalize_test_flags(metrics_dispatch_test)
+
+# Metrics AVX512 Property Tests
+set(SRCS_METRICS_AVX512_TEST ${CMAKE_CURRENT_LIST_DIR}/metrics_avx512_test.cc)
+
+add_executable(metrics_avx512_test ${SRCS_METRICS_AVX512_TEST})
+target_include_directories(metrics_avx512_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(metrics_avx512_test PUBLIC valkey_metrics)
+finalize_test_flags(metrics_avx512_test)
+
+# Metrics AVX2 Property Tests
+set(SRCS_METRICS_AVX2_TEST ${CMAKE_CURRENT_LIST_DIR}/metrics_avx2_test.cc)
+
+add_executable(metrics_avx2_test ${SRCS_METRICS_AVX2_TEST})
+target_include_directories(metrics_avx2_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(metrics_avx2_test PUBLIC valkey_metrics)
+finalize_test_flags(metrics_avx2_test)
+
 # Base common test library - used by all test suites
 set(SRCS_COMMON ${CMAKE_CURRENT_LIST_DIR}/common.cc
                 ${CMAKE_CURRENT_LIST_DIR}/common.h)

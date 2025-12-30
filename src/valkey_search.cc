@@ -29,6 +29,7 @@
 #include "src/coordinator/server.h"
 #include "src/coordinator/util.h"
 #include "src/metrics.h"
+#include "src/metrics/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
@@ -1106,6 +1107,15 @@ absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
                                   ValkeyModuleString **argv, int argc) {
   ctx_ = ValkeyModule_GetDetachedThreadSafeContext(ctx);
 
+  // Initialize the metrics system and log the selected implementation
+  if (metrics::Init() != 0) {
+    return absl::InternalError("Failed to initialize metrics system");
+  }
+  VMSDK_LOG(NOTICE, ctx) << "Metrics system initialized: implementation="
+                         << metrics::ImplName()
+                         << ", capabilities=0x" << std::hex << metrics::ImplCaps()
+                         << std::dec;
+
   // Register a single module type for Aux load/save callbacks.
   VMSDK_RETURN_IF_ERROR(RegisterModuleType(ctx));
 
@@ -1161,6 +1171,7 @@ bool ValkeySearch::IsChildProcess() {
 void ValkeySearch::OnUnload(ValkeyModuleCtx *ctx) {
   ValkeyModule_FreeThreadSafeContext(ctx_);
   reader_thread_pool_ = nullptr;
+  metrics::Fini();
 }
 
 std::shared_ptr<vmsdk::cluster_map::ClusterMap>

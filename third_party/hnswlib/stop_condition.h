@@ -8,10 +8,6 @@
   #include "vmsdk/src/memory_allocation_overrides.h" // IWYU pragma: keep
 #endif
 
-#if defined(USE_SIMSIMD)
-#include "third_party/hnswlib/simsimd.h"
-#endif
-
 namespace hnswlib {
 
 template<typename DOCIDTYPE>
@@ -32,31 +28,7 @@ class MultiVectorL2Space : public BaseMultiVectorSpace<DOCIDTYPE> {
 
  public:
     MultiVectorL2Space(size_t dim) {
-#if defined(USE_SIMSIMD)
-        fstdistfunc_ = L2SqrSimsimd;
-#else
-        fstdistfunc_ = L2Sqr;
-#if defined(USE_SSE) || defined(USE_AVX) || defined(USE_AVX512)
-    #if defined(USE_AVX512)
-        if (AVX512Capable())
-            L2SqrSIMD16Ext = L2SqrSIMD16ExtAVX512;
-        else if (AVXCapable())
-            L2SqrSIMD16Ext = L2SqrSIMD16ExtAVX;
-    #elif defined(USE_AVX)
-        if (AVXCapable())
-            L2SqrSIMD16Ext = L2SqrSIMD16ExtAVX;
-    #endif
-
-        if (dim % 16 == 0)
-            fstdistfunc_ = L2SqrSIMD16Ext;
-        else if (dim % 4 == 0)
-            fstdistfunc_ = L2SqrSIMD4Ext;
-        else if (dim > 16)
-            fstdistfunc_ = L2SqrSIMD16ExtResiduals;
-        else if (dim > 4)
-            fstdistfunc_ = L2SqrSIMD4ExtResiduals;
-#endif
-#endif
+        fstdistfunc_ = L2SqrMetrics;
         dim_ = dim;
         vector_size_ = dim * sizeof(float);
         data_size_ = vector_size_ + sizeof(DOCIDTYPE);
@@ -95,42 +67,8 @@ class MultiVectorInnerProductSpace : public BaseMultiVectorSpace<DOCIDTYPE> {
 
  public:
     MultiVectorInnerProductSpace(size_t dim) {
-#if defined(USE_SIMSIMD)
-        fstdistfunc_ = InnerProductDistanceSimsimd;
-#else
-        fstdistfunc_ = InnerProductDistance;
-#if defined(USE_AVX) || defined(USE_SSE) || defined(USE_AVX512)
-    #if defined(USE_AVX512)
-        if (AVX512Capable()) {
-            InnerProductSIMD16Ext = InnerProductSIMD16ExtAVX512;
-            InnerProductDistanceSIMD16Ext = InnerProductDistanceSIMD16ExtAVX512;
-        } else if (AVXCapable()) {
-            InnerProductSIMD16Ext = InnerProductSIMD16ExtAVX;
-            InnerProductDistanceSIMD16Ext = InnerProductDistanceSIMD16ExtAVX;
-        }
-    #elif defined(USE_AVX)
-        if (AVXCapable()) {
-            InnerProductSIMD16Ext = InnerProductSIMD16ExtAVX;
-            InnerProductDistanceSIMD16Ext = InnerProductDistanceSIMD16ExtAVX;
-        }
-    #endif
-    #if defined(USE_AVX)
-        if (AVXCapable()) {
-            InnerProductSIMD4Ext = InnerProductSIMD4ExtAVX;
-            InnerProductDistanceSIMD4Ext = InnerProductDistanceSIMD4ExtAVX;
-        }
-    #endif
-
-        if (dim % 16 == 0)
-            fstdistfunc_ = InnerProductDistanceSIMD16Ext;
-        else if (dim % 4 == 0)
-            fstdistfunc_ = InnerProductDistanceSIMD4Ext;
-        else if (dim > 16)
-            fstdistfunc_ = InnerProductDistanceSIMD16ExtResiduals;
-        else if (dim > 4)
-            fstdistfunc_ = InnerProductDistanceSIMD4ExtResiduals;
-#endif
-#endif
+        fstdistfunc_ = InnerProductDistanceMetrics;
+        dim_ = dim;
         vector_size_ = dim * sizeof(float);
         data_size_ = vector_size_ + sizeof(DOCIDTYPE);
     }
